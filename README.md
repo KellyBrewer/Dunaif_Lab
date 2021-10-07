@@ -1,2 +1,2 @@
 # Dunaif_Lab
-This repository contain material for Dunaif Laboratory for public sharing.
+This repository contains material for Dunaif Laboratory for public sharing.
