@@ -1,0 +1,1629 @@
+---
+  title: "Phenotype Clustering-9 traits"
+author: "Matta Dapas, modified by Ryan Sisk and Kelly Brewer"
+date: paste0("script updated 10/07/2021, analysis run ","`r Sys.Date()`")
+output: 
+  html_document:
+  toc: true
+toc_float:
+  collapsed: true
+smooth_scroll: false
+toc_depth: 4
+df_print: paged
+---
+  <style type="text/css">
+  #TOC {
+  font-size: 12px; 
+}
+
+</style>
+  
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+***
+***
+## Input Data Fields and Structure
+```{r read_data, eval=TRUE, echo=FALSE, error=FALSE, message=FALSE}
+
+##~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+##                               Import Packages                            ----
+##~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+library(CGPfunctions)
+library(gmodels)
+library(ggplot2)
+library(tidyverse)
+library(ggrepel)
+library(tidymodels)
+library(reshape2)
+library(factoextra)
+library(FactoMineR)
+library(ClusterR)
+library(fpc)
+library(stats)
+library(gplots)
+library(clusterSim)
+library(dplyr)
+library(describedata)
+library(lattice)
+library(corrplot)
+library(DT)
+library(forcats)
+library(ggradar)
+library(qwraps2)
+options(qwraps2_markup = "markdown")
+library(visdat)
+library(Hmisc)
+library(ggstatsplot)
+
+
+##~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+##                          Import / Export Locations                       ----
+##~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+
+##~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+## Path/file of the input file, which must have columns according to
+## cluster_input_cols below.
+##~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+input_file <- "path/to/input/text/file/SampleData.txt"
+removed.path <- 'path/to/Subtyping_Removed_Outliers.txt'
+cluster_results_8traits <- 'path/to/Cluster_Results_8traits.txt'
+cluster_results_9traits <- 'path/to/Cluster_Results_9traits.txt'
+
+
+
+##~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+##                              Declare Functions                           ----
+##~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+
+
+#                Reverse Normal Transformation                ~~~
+#~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+rntransform <- function(y) {
+  out <- rank(y)
+  out[is.na(y)] <- NA
+  qnorm((out - 0.5) / max(out, na.rm=T))
+}
+
+
+
+#                   Descriptive Stat Tables                   ~~~
+#~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+trait.desc.stats <- function(var, assaymethod) {
+  var.name <- substitute(var)
+  assay.name <- substitute(assaymethod)
+  datatable(proc_means(m.df, vars = as.character(var.name), by = as.character(assay.name), 
+                       n=TRUE, nmiss = TRUE, mean=TRUE,
+                       sd = TRUE, min = TRUE, max = TRUE, median = TRUE,
+                       q1 = TRUE, q3 = TRUE), rownames = FALSE, 
+            options = list(dom = 't',columnDefs = list(list(className = 'dt-center', 
+                                                            targets = "_all"))))
+}
+
+
+
+#            Histograms of Traits by Assay Method             ~~~
+#~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+trait.plot.hist <- function(df, var, assaymethod) {
+  arg <- match.call()
+  assay.name <- substitute(assaymethod)
+  count.vec <- df[[assay.name]]
+  count <- length(unique(count.vec))
+  
+  ggplot(data = subset(df, !is.na(eval(arg$var))), 
+         aes(x = eval(arg$var), group = eval(arg$assaymethod), 
+             fill = as.factor(eval(arg$assaymethod)))) + 
+    geom_histogram(bins = 30, aes(y=..density..), colour="black", fill="white") + 
+    geom_density(alpha = 0.7) + 
+    facet_wrap(~eval(arg$assaymethod), nrow = count) + xlab(substitute(var)) +
+    guides(fill=guide_legend(title="Assay Method"))
+} 
+
+
+
+#              Boxplots of Traits by Assay Method             ~~~
+#~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+trait.plot.box <- function(df, var, assaymethod) {  
+  arg <- match.call()
+  assay.name <- substitute(assaymethod)
+  ggplot(data = subset(df, !is.na(eval(arg$var))), 
+         aes(x = as.factor(eval(arg$assaymethod)), y = eval(arg$var), 
+             fill = as.factor(eval(arg$assaymethod)))) + 
+    geom_boxplot(position=position_dodge(1)) + xlab("Assay Method") +
+    ylab(substitute(var)) + guides(fill=guide_legend(title="Assay Method"))
+}
+
+
+
+#            Violin Plots of Traits by Assay Method           ~~~
+#~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+trait.violin.stats <- function(df, var) { 
+  var <- enquo(var)
+  ggbetweenstats(data = df, x = cluster_id, y = !!var,
+                 title = "Distribution  Across Clusters", type = "p",
+                 pairwise.comparisons = TRUE, # display significant pairwise comparisons
+                 pairwise.annotation = "p.value", # how do you want to annotate the pairwise comparisons
+                 p.adjust.method = "bonferroni" # method for adjusting p-values for multiple comparisons
+  ) + 
+    ggplot2::scale_color_manual(values = c(rgb(0.81,0.3,0.25,.85), rgb(.33,.5,.77,1), 'grey')) +
+    scale_x_discrete(labels= c('Metabolic', 'Reproductive', "Indeterminate"))
+}
+
+
+
+##~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+##                              Declare Variables                           ----
+##~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+
+##~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+## Names of sample ID, age, bmi, and the other 7 traits
+##~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+sample <- 'sample_id'; age <- 'age'; bmi <- 'bmi'
+traitnames = c('T', 'dheas', 'i0', 'g0', 'shbg', 'lh', 'fsh', 'amh')
+
+##~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+## variable names for displaying/plotting results
+##~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+var_labels <- c('BMI', 'T', 'DHEAS', 'Ins0', 'Glu0', 'SHBG', 'LH', 'FSH', 'AMH')
+var_labels_8 <- var_labels[var_labels != 'AMH'] #Create list of variable names without AMH included
+
+##~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+## The assay method for each of the 8 traits is another variable, named by
+## adding a postfix to the trait name.  The postfix in our data is
+## '_assay_method'.  For example, dheas_assay_method.
+##~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+assay <- '_assay_method'
+
+## columns of the input file
+cluster_input_cols <- c(sample, age, bmi,
+                        traitnames,
+                        paste0(traitnames, assay))
+## columns of variables (some to be defined later) for clustering
+d <- '.'
+cluster_cols <- c(sample, age,
+                  paste(c(bmi, traitnames), 'z', sep=d))
+
+## Methods for distance calculation and for hierarchical clustering.
+## Our analysis uses Manhattan distance and Ward.D clustering method.
+dist_metric <- 'manhattan'
+clust_method <- 'ward.D'
+
+## Read in input file (must have columns according to cluster_input_cols)
+## Errors will result if you are missing assay method variables. If there
+## is only 1 assay method, fill assay method with "1" for each trait assay
+## method.
+m.df0 <- read.delim(input_file, na.strings=c("", "#N/A", "missing"))
+str(m.df0)
+
+
+```
+
+***
+  
+## Remove dupes, outliers and missing data
+```{r remove_dupes_incomplete, eval=TRUE, echo=FALSE, error=FALSE, message=TRUE}
+
+
+## Remove duplicate entries (keep the first occurrence for each set of duplicates)
+dupidx = duplicated(m.df0[, cluster_input_cols[1:(3+length(traitnames))]])
+if(sum(dupidx)>0) warning(paste("Removing", sum(dupidx), "duplicates from data"))
+m.df <- m.df0[!dupidx,]
+
+
+## Only keep samples with complete, non-zero data for age and the 8 traits
+completeidx = complete.cases(m.df[, c(age, bmi, traitnames)])
+if(sum(!completeidx)>0) {
+  warning(paste("Removing", sum(!completeidx), "records due to incomplete data"))
+  for(ii in c(age, bmi, traitnames)) {
+    tmpidx = complete.cases(m.df[, ii])
+    if(sum(!tmpidx)>0) message(paste(ii, "has", sum(!tmpidx), "missing records"))
+  }
+  m.df <- m.df[completeidx, ]
+}
+
+message(paste("There are",nrow(m.df), "cases remaining in the dataset after removal of incomplete cases."))
+```
+***
+  
+## Flagging Outliers for Removal
+```{r outliers_removal, eval=TRUE, echo=FALSE, error=FALSE, message=TRUE}
+
+# Create variables for removal flag flags and set them == 0
+trait.rem.flags = c()
+for (var in traitnames) {
+  names <- c(paste0(var, '_rem_flag', sep=''))
+  trait.rem.flags[[names]] <- names
+}
+trait.rem.flags <- as.character(trait.rem.flags)
+for (var in trait.rem.flags) {
+  m.df[,var] <- 0
+}
+
+
+## NOTE: These will need to be set for your data.  If you do not have the same outlier
+## criteria, please remove the variables created below.
+## Trait Flag examples - 1=to be removed, 0=not outlier
+## m.df$g0_rem_flag <- ifelse(m.df$g0 > 126, 1, 0)
+## m.df$shbg_rem_flag <- ifelse(m.df$shbg > 200 & m.df$shbg_assay_method = 1, 1, 0)
+
+## G0 Removal for any patient with T2D based on fasting glucose level
+m.df$g0_rem_flag <- ifelse(m.df$g0 > 126, 1, 0)
+
+
+
+## Print count of outliers for each trait that will be removed
+for (var in traitnames) {
+  x <- paste0(var,"_rem_flag")
+  if(sum(m.df[,x]) > 0) message(paste(var, "has", sum(m.df[,x]), "records removed as outliers."))
+}
+
+## Write file of all outliers that will be removed.
+m.df.removed <- filter(m.df, if_any(all_of(trait.rem.flags), ~ . == 1))
+write.table(m.df.removed, removed.path, sep = '\t', row.names = F, quote = F)
+message(paste0('Outliers removed from dataset written to: ', removed.path))
+
+for (var in traitnames) {
+  x <- paste0(var,"_rem_flag")
+  m.df[,var] <- ifelse(m.df[,x] == 1, NA, m.df[,var])
+}
+
+## Only keep samples with complete, non-zero data for age and the 8 traits
+completeidx = complete.cases(m.df[, c(age, bmi, traitnames)])
+if(sum(!completeidx)>0) {
+  warning(paste("Removing", sum(!completeidx), "records records containing outliers"))
+  m.df <- m.df[completeidx, ]
+}
+
+message(paste("There are",nrow(m.df), "cases remaining in the dataset after outliers were removed."))
+
+
+```
+
+***
+## Descriptive Stats by Trait after Removals
+### Age and BMI
+```{r descrip_stats_agebmi, echo=FALSE, error=FALSE, message=FALSE, out.width="50%"}
+##~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+##                      Review Data Before Transformation                   ----
+##~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+
+#                         Age and BMI                         ~~~
+#~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+datatable(proc_means(m.df, vars = "age", n=TRUE, nmiss = TRUE, mean=TRUE,  sd = TRUE, min = TRUE, max = TRUE, median = TRUE, q1 = TRUE, q3 = TRUE), rownames = FALSE, options = list(dom = 't', columnDefs = list(list(className = 'dt-center', targets = "_all"))))
+
+ggplot(data = subset(m.df, !is.na(age)), aes(x = age)) +
+  geom_histogram(aes(y=..density..), colour="black", fill="white") +
+  geom_density(alpha = 0.7)
+ggplot(data = subset(m.df, !is.na(age)), aes(y = age)) + 
+  geom_boxplot(position=position_dodge(1))
+
+
+datatable(proc_means(m.df, vars = "bmi", n=TRUE, nmiss = TRUE, mean=TRUE,  sd = TRUE, min = TRUE, max = TRUE, median = TRUE,
+                     q1 = TRUE, q3 = TRUE), rownames = FALSE, options = list(dom = 't', columnDefs = list(list(className = 'dt-center', targets = "_all"))))
+
+ggplot(data = subset(m.df, !is.na(bmi)), aes(x = bmi)) +
+  geom_histogram(aes(y=..density..), colour="black", fill="white") +
+  geom_density(alpha = 0.7)
+ggplot(data = subset(m.df, !is.na(bmi)), aes(y = bmi)) + 
+  geom_boxplot(position=position_dodge(1))
+```           
+
+### Testosterone
+```{r descrip_stats_t, echo=FALSE, error=FALSE, message=FALSE, out.width="50%"}
+
+#                        Testosterone                         ~~~
+#~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+trait.desc.stats(T, T_assay_method)
+trait.plot.hist(m.df, T, T_assay_method)
+trait.plot.box(m.df, T, T_assay_method)
+
+```
+
+### SHBG
+```{r descrip_stats_shbg, echo=FALSE, error=FALSE, message=FALSE, out.width="50%"}
+
+#                            SHBG                             ~~~
+#~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+trait.desc.stats(shbg, shbg_assay_method)
+trait.plot.hist(m.df, shbg, shbg_assay_method)
+trait.plot.box(m.df, shbg, shbg_assay_method)
+
+```
+
+### DHEAS
+```{r descrip_stats_dheas, echo=FALSE, error=FALSE, message=FALSE, out.width="50%"}
+
+#                            DHEAS                            ~~~
+#~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+trait.desc.stats(dheas, dheas_assay_method)
+trait.plot.hist(m.df, dheas, dheas_assay_method)
+trait.plot.box(m.df, dheas, dheas_assay_method)
+
+```
+
+### LH
+```{r descrip_stats_lh, echo=FALSE, error=FALSE, message=FALSE, out.width="50%"}
+
+#                              LH                             ~~~
+#~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+trait.desc.stats(lh, lh_assay_method)
+trait.plot.hist(m.df, lh, lh_assay_method)
+trait.plot.box(m.df, lh, lh_assay_method)
+
+```
+
+### FSH
+```{r descrip_stats_fsh, echo=FALSE, error=FALSE, message=FALSE, out.width="50%"}
+
+#                             FSH                             ~~~
+#~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+trait.desc.stats(fsh, fsh_assay_method)
+trait.plot.hist(m.df, fsh, fsh_assay_method)
+trait.plot.box(m.df, fsh, fsh_assay_method)
+
+```
+
+### Fasting Insulin
+```{r descrip_stats_i0, echo=FALSE, error=FALSE, message=FALSE, out.width="50%"}
+
+#                       Fasting Insulin                       ~~~
+#~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+trait.desc.stats(i0, i0_assay_method)
+trait.plot.hist(m.df, i0, i0_assay_method)
+trait.plot.box(m.df, i0, i0_assay_method)
+
+```
+
+### Fasting Glucose
+```{r descrip_stats_g0, echo=FALSE, error=FALSE, message=FALSE, out.width="50%"}
+
+#                       Fasting Glucose                       ~~~
+#~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+trait.desc.stats(g0, g0_assay_method)
+trait.plot.hist(m.df, g0, g0_assay_method)
+trait.plot.box(m.df, g0, g0_assay_method)
+
+```
+
+### AMH
+```{r descrip_stats_amh, echo=FALSE, error=FALSE, message=FALSE, out.width="50%"}
+
+#                             AMH                             ~~~
+#~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+trait.desc.stats(amh, amh_assay_method)
+trait.plot.hist(m.df, amh, amh_assay_method)
+trait.plot.box(m.df, amh, amh_assay_method)
+
+```
+
+```{r adjust_normalize, eval=TRUE, echo=FALSE, error=FALSE, message=TRUE}
+##~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+##                        Adjust BMI and 7 Other Traits                     ----
+##                  Then apply reverse normal transformation                ----
+##~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+#        Adjust log(BMI) for age, obtain the residual.        ~~~
+#~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+m.df$bmi.z <- log(m.df$bmi)
+model <- lm(bmi.z ~ age, data=m.df)
+m.df$bmi.z <- resid(model)
+
+
+#      For the other 7 traits, adjust log(trait) for age      ~~~
+#             and assay method (if there is                   ~~~
+#       more than one method), obtain the residual.           ~~~
+#~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+for (var in traitnames) {
+  method <- paste0(var, assay)
+  z <- paste(var, 'z', sep=d)
+  m.df[,method] <- as.factor(as.character(m.df[,method]))
+  m.df[, z] <- log(m.df[, var])
+  if (nlevels(m.df[,method]) > 1) {
+    model <- lm(as.formula(paste(z, '~', age, '+', method)), data=m.df)
+  } else {
+    model <- lm(as.formula(paste(z, '~', age)), data=m.df)
+  }
+  m.df[, z] <-  resid(model)
+}
+
+#  Apply the inverse normal transformation to the residuals   ~~~
+#~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+for (col in cluster_cols[3:length(cluster_cols)]) {
+  #print(c(col,shapiro.test(m.df[,col])[[2]] ))
+  m.df[!is.na(m.df[,col]), col] <- rntransform(m.df[!is.na(m.df[,col]), col])
+}
+```
+
+
+```{r create_clust_df, eval=TRUE, echo=FALSE, error=FALSE, message=TRUE}
+
+#  # Display number of subjects being included after removals ~~~
+#~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+m.df2 <- m.df[, cluster_cols]
+names(m.df2) <- c(sample, age, var_labels)
+
+# create two new dataframes, one with AMH and one without AMH
+m.df.noamh <- subset(m.df2, select = -c(AMH))
+
+```
+
+***
+***
+## Clustering with 9 Traits
+  
+***
+***
+### Correlation plot of clustering variables
+```{r correlation, eval=TRUE, echo=FALSE, error=FALSE, message=TRUE}
+##~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+##                              Correlation Plot                            ----
+##~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+corrplot(cor(m.df2[3:11]), method = 'number', type = 'lower')
+```
+
+
+
+```{r perform_clustering, eval=TRUE, echo=FALSE, error=FALSE, message=TRUE}
+##~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+##                       Perform Hierarchical Clustering                    ----
+##~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+     #            Hierarchical clustering on the columns           ~~~
+     #~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+cluster_matrix <- as.matrix(na.omit(m.df2[, var_labels]))
+hc <- hclust(dist(cluster_matrix, method=dist_metric), method=clust_method)
+
+     #             Hierarchical clustering on the rows             ~~~
+     #~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+df.12 <- as.matrix(na.omit(m.df2[, var_labels]))
+row_hc <- hclust(dist(t(df.12), method=dist_metric), method=clust_method)
+
+     #      Define clusters (k=3 means we define 3 clusters)       ~~~
+     #~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+mycl <- cutree(hc, k=3)
+
+     #                    Get clustering stats                     ~~~
+     #~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+stats <- cluster.stats(dist(cluster_matrix, method=dist_metric), mycl)
+
+     #  Add the cluster ID# to your data and relabel the clusters  ~~~
+     #~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+clusters <- as.data.frame(cbind(cluster_matrix, cluster_id=mycl))
+
+```
+
+```{r relabel_clusters, eval=TRUE, echo=FALSE, error=FALSE, message=TRUE}
+##~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+##            Find Means of Most Extreme Variables to ReLabel Groups        ----
+##~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+clus.BMI.avg <- clusters %>%
+  group_by(cluster_id) %>%
+  summarise(BMI = mean(BMI))
+met <- which.max(clus.BMI.avg$BMI)
+clus.SHBG.avg <- clusters %>%
+  group_by(cluster_id) %>%
+  summarise(SHBG = mean(SHBG))
+rep <- which.max(clus.SHBG.avg$SHBG)
+clusters$cluster_new <- ifelse(clusters$cluster_id==met, 10,
+                               ifelse(clusters$cluster_id==rep, 11, 12))
+clusters$cluster_id <- ifelse(clusters$cluster_new==10, 1,
+                              ifelse(clusters$cluster_new==11, 2, 3))
+
+clusters$cluster_new = NULL  ## remove this temporary column
+clusters$group <- ifelse(clusters$cluster_id==1, "Metabolic",
+                         ifelse(clusters$cluster_id==2, "Reproductive", "Indeterminate"))
+
+##~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+## Apply updated cluster ID's an updated variable 'mycl_upd' that was generated
+## from the cuttree function after pruning to 3 from the hierarchical clustering
+##~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+mycl_upd <- clusters$cluster_id
+```
+
+```{r clustering_stats, eval=TRUE, echo=FALSE, error=FALSE, message=TRUE}
+##~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+##                       Calculate Clustering Statistics                    ----
+##~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+stats <- cluster.stats(dist(cluster_matrix, method=dist_metric), mycl_upd)
+
+```
+***
+***
+  
+### Hierarchical Clustering Heatmap
+```{r heatmap, eval=TRUE, echo=FALSE, error=FALSE, message=TRUE}
+##~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+##          Generate Heatmap from Cluster Matrix Previously Calculated      ----
+##~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+
+## Get a color palette equal to the number of clusters
+## These colors may need to be reordered based on subtype
+cluster_colors <- c("#CF4D40D9","#5480C4FF",'grey') 
+
+
+## Create vector of colors for side bar, declare colors to be used in heat map
+myClusterSideBar <- cluster_colors[mycl_upd]
+colors = c(seq(-4.401,-1.201,length=40), seq(-1.2,1.2,length=30),
+           seq(1.201,4.401,length=40))
+my_palette <- colorRampPalette(c("blue", "white", "red"))(n = 109)
+
+## Draw the heat map
+heatmap.2(t(cluster_matrix),
+          main=paste0("MEGA_Controls\nn=", dim(cluster_matrix)[1]), revC=T,
+          Rowv=as.dendrogram(row_hc), Colv=as.dendrogram(hc), dendrogram="both",
+          trace="none", col=my_palette,
+          ColSideColors=myClusterSideBar, key=TRUE, key.title='', key.xlab='',
+          margins=c(2,6),
+          labCol='', symm=F, symkey=F, symbreaks=F, breaks=colors)
+
+```
+
+```{r jaccard, eval=TRUE, echo=FALSE, error=FALSE, message=FALSE, results='hide'}
+
+
+##~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+##   Calculate Cluster Stability (Jaccard Scores) using Bootstrapping Method----
+##~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+cboot.hclust <- clusterboot(dist(cluster_matrix, method=dist_metric),
+                            B=1000, clustermethod=disthclustCBI,
+                            method=clust_method, k=3)
+
+
+## Relabel bootmean values as these are based off ordering in the original cluster ID labels.
+jaccard_score <- as.list(cboot.hclust$bootmean)
+
+```
+
+***
+### Hierarchical Clustering Summary
+```{r table_clust, eval=TRUE, echo=FALSE, error=FALSE, message=TRUE}
+##~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+##              Summary Table of Hierarchical Clustering Results            ----
+##~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+tab_cnt <- c(sum(mycl_upd == 1), sum(mycl_upd == 2), sum(mycl_upd == 3))
+
+tab_perc <- c(round(sum(mycl_upd == 1)/length(mycl_upd),4)*100, 
+              round(sum(mycl_upd == 2)/length(mycl_upd),4)*100, 
+              round(sum(mycl_upd == 3)/length(mycl_upd),4)*100)
+
+tab_jac <- c(jaccard_score[met], 
+             jaccard_score[rep], 
+             jaccard_score[-c(met, rep)])
+
+tab_jac <- lapply(tab_jac, round, 2)
+
+tab <- rbind(tab_cnt, tab_perc, tab_jac)
+colnames(tab) <- c('Metabolic', 'Reproductive', 'Indeterminate')
+rownames(tab) <- c('Count', 'Percent', 'Jaccard Index')
+
+datatable(tab, options = list(dom = 't', columnDefs = list(list(className = 'dt-center', targets = "_all"))))
+
+## Relabel table for 9 clusters to use for comparison with 8 traits
+tab_nine <- tab
+```
+
+***
+### Boxplots of Normalized Traits by Cluster
+```{r boxplots, eval=TRUE, echo=FALSE, error=FALSE, message=FALSE, warning=FALSE, out.width= "110%"}
+##~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+##                        Boxplots of Traits by Cluster                     ----
+##~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+## Merge the sample_ids
+clusters <- merge(clusters, m.df2, by=var_labels)
+clusters.df <- clusters
+
+## Group data by cluster ID for plots
+hc.melt <- melt(clusters[1:10], id.var = "cluster_id")
+
+sorted_vars <- var_labels
+plot_labels <- c('Ins0', 'BMI', 'Glu0', 'DHEAS', 'T', 'FSH', 'LH', 'SHBG', 'AMH')
+hc.melt$variable <- factor(hc.melt$variable, levels = c('Ins0', 'BMI', 'Glu0', 'DHEAS', 'T', 'FSH', 'LH', 'SHBG', 'AMH'))
+
+
+## Create plot of normalized data for each subtype
+ggplot(data = hc.melt, aes(x=variable, y=value, fill=as.factor(cluster_id))) + geom_boxplot(outlier.shape = NA, coef = 0) +
+  scale_fill_manual(labels = c("Metabolic", "Reproductive", "Indeterminate"), values=c(rgb(0.81,0.3,0.25,.85), rgb(.33,.5,.77,1), 'grey'), name = "") + ylim(-2,2) + 
+  theme_bw() +
+  theme(legend.position = "bottom", legend.box = "horizontal", 
+        axis.title.x=element_blank()) + ylab("Z")
+
+
+```
+
+
+```{r stats_plots, eval=TRUE, echo=FALSE, error=FALSE, message=FALSE, warning=FALSE}
+
+##~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+##                      Violin Plots of Traits by Cluster                   ----
+##~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+trait.violin.stats(clusters, BMI)
+trait.violin.stats(clusters, T)
+trait.violin.stats(clusters, SHBG)
+trait.violin.stats(clusters, DHEAS)
+trait.violin.stats(clusters, LH)
+trait.violin.stats(clusters, FSH)
+trait.violin.stats(clusters, Ins0)
+trait.violin.stats(clusters, Glu0)
+trait.violin.stats(clusters, AMH)
+```
+
+
+
+```{r updatelabel, eval=TRUE, echo=FALSE, error=FALSE, message=TRUE}
+     #                   Re-order The Data Frame                   ~~~
+     #~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+col_idx <- grep("cluster_id", names(clusters))
+clusters <- clusters[, c(col_idx, (1:ncol(clusters))[-col_idx])]
+col_idx <- grep(sample, names(clusters))
+clusters <- clusters[, c(col_idx, (1:ncol(clusters))[-col_idx])]
+
+
+
+```
+
+***
+### Radar Plot of Normalized Traits by Cluster
+```{r radarplot, eval=TRUE, echo=FALSE, error=FALSE, message=TRUE}
+##~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+##                       Radar Plot of Traits by Cluster                    ----
+##~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+# radar.df <- clusters %>%
+#   group_by(group) %>%
+#   summarise(across(BMI:FSH, mean))
+# 
+# radar_order <- c('group', 'Ins0', 'BMI', 'Glu0', 'DHEAS', 'T', 'LH', 'FSH', 'SHBG')
+# radar.df <- radar.df[, radar_order]
+# 
+# ggradar(
+#    radar.df, 
+#    font.radar = "sans",
+#    values.radar = c("-1.5", "0", "1.5"),
+#    grid.min = -1.5, grid.mid = 0, grid.max = 1.5,
+#    # Polygons
+#    group.line.width = 1, 
+#    group.point.size = 1,
+#    group.colours = c('grey', rgb(0.81,0.3,0.25,.85), rgb(.33,.5,.77,1)),
+#    background.circle.colour = "white",
+#    gridline.mid.colour = "black",
+#    legend.position = "bottom"
+#  )
+```
+
+
+***
+  
+  
+### PCA Plot of Cluster Results
+```{r pca_plots, eval=TRUE, echo=FALSE, error=FALSE, message=TRUE}
+
+
+
+##~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+##                       PCA Plots with Cluster Overlays                    ----
+##~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+
+     #                          PCA Plot                           ~~~
+     #~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+clusters$cluster_id <- as.factor(clusters$cluster_id)
+clusters$group <- ifelse(clusters$cluster_id==1, "Metabolic", ifelse(clusters$cluster_id==2, "Reproductive", "Indeterminate"))
+
+pca <- PCA(clusters[3:11], graph = F)
+
+##~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+## If plot is mirrored from example, multiply PC1 by -1 to reverse image to
+## maintain consistency.
+##~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+pca$ind$coord[,1] <- pca$ind$coord[,1]*-1
+pca$var$coord[,1] <- pca$var$coord[,1]*-1
+
+
+     #                        Draw PCA Plot                        ~~~
+     #~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+fviz_pca_biplot(pca, col.ind = clusters$group, palette = c('grey', rgb(0.81,0.3,0.25,.85), rgb(.33,.5,.77,1)),
+                addEllipses = TRUE, label = "var", col.var = "black", repel = TRUE,
+                legend.title = "Subtype", pointsize=2,#pointshape=19,
+                xlab = paste("PC1 (", round(pca$eig[1,2],2), '%)', sep=''),
+                ylab = paste("PC2 (", round(pca$eig[2,2],2), '%)', sep=''),
+                title = "")
+
+
+
+```
+
+***
+  
+### Summary of Normalized Traits by Cluster
+```{r clusters_by_traits, eval=TRUE, echo=FALSE, error=FALSE, message=TRUE, results = "asis"}
+
+##~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+##                    Table of Normalized Traits by Cluster                 ----
+##~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+z_summary <-
+  list("BMI" =
+         list("median (IQR)" = ~ qwraps2::median_iqr(BMI),
+              "mean (sd)" = ~ qwraps2::mean_sd(BMI)),
+       "Testosterone" =
+         list("median (IQR)" = ~ qwraps2::median_iqr(T),
+              "mean (sd)" = ~ qwraps2::mean_sd(T)),
+       "SHBG" =
+         list("median (IQR)" = ~ qwraps2::median_iqr(SHBG),
+              "mean (sd)" = ~ qwraps2::mean_sd(SHBG)),
+       "DHEAS" =
+         list("median (IQR)" = ~ qwraps2::median_iqr(DHEAS),
+              "mean (sd)" = ~ qwraps2::mean_sd(DHEAS)),
+       "LH" =
+         list("median (IQR)" = ~ qwraps2::median_iqr(LH),
+              "mean (sd)" = ~ qwraps2::mean_sd(LH)),
+       "FSH" =
+         list("median (IQR)" = ~ qwraps2::median_iqr(FSH),
+              "mean (sd)" = ~ qwraps2::mean_sd(FSH)),
+       "Fasting Insulin" =
+         list("median (IQR)" = ~ qwraps2::median_iqr(Ins0),
+              "mean (sd)" = ~ qwraps2::mean_sd(Ins0)),
+       "Fasting Glucose" =
+         list("median (IQR)" = ~ qwraps2::median_iqr(Glu0),
+              "mean (sd)" = ~ qwraps2::mean_sd(Glu0)),
+       "AMH" =
+         list("median (IQR)" = ~ qwraps2::median_iqr(AMH),
+              "mean (sd)" = ~ qwraps2::mean_sd(AMH))
+  )
+
+clusters_summary_table <- summary_table(dplyr::group_by(clusters, cluster_id), z_summary)
+
+print(clusters_summary_table,
+      rtitle = "Summary Statistics by Cluster",
+      cnames = c("Metabolic", "Reproductive", "Intermediate"))
+```
+
+***
+  
+### Summary of Raw Trait Values by Cluster and Assay Method
+#### Testosterone
+```{r assay_methods_t, eval=TRUE, echo=FALSE, error=FALSE, message=TRUE}
+
+##~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+##         Summarized Data of Raw Trait Values by Cluster/Assay Method      ----
+##
+##                         This Repeats for Each Trait                      ----
+##~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+clust.df.tmp <- clusters.df[, c('sample_id', 'cluster_id', 'group')]
+clust.df <- merge(m.df, clust.df.tmp, by = 'sample_id' )
+met.df <- clust.df[clust.df$cluster_id == 1,]
+rep.df <- clust.df[clust.df$cluster_id == 2,]
+int.df <- clust.df[clust.df$cluster_id == 3,]
+
+
+datatable(proc_means(met.df, vars = "T", by = "T_assay_method", 
+                     n=TRUE, nmiss = TRUE, mean=TRUE,  
+                     sd = TRUE, min = TRUE, max = TRUE, 
+                     median = TRUE, q1 = TRUE, q3 = TRUE), 
+          rownames = FALSE, 
+          options = list(dom = 't', 
+                         columnDefs = list(list(className = 'dt-center', targets = "_all"))),
+          caption = "Metabolic")
+datatable(proc_means(rep.df, vars = "T", by = "T_assay_method", 
+                     n=TRUE, nmiss = TRUE, mean=TRUE,  
+                     sd = TRUE, min = TRUE, max = TRUE, 
+                     median = TRUE, q1 = TRUE, q3 = TRUE), 
+          rownames = FALSE, 
+          options = list(dom = 't', 
+                         columnDefs = list(list(className = 'dt-center', targets = "_all"))),
+          caption = "Reproductive")
+datatable(proc_means(int.df, vars = "T", by = "T_assay_method", 
+                     n=TRUE, nmiss = TRUE, mean=TRUE,  
+                     sd = TRUE, min = TRUE, max = TRUE, 
+                     median = TRUE, q1 = TRUE, q3 = TRUE), 
+          rownames = FALSE, 
+          options = list(dom = 't', 
+                         columnDefs = list(list(className = 'dt-center', targets = "_all"))),
+          caption = "Intermediate")
+
+```
+
+
+#### SHBG
+```{r assay_methods_shbg, eval=TRUE, echo=FALSE, error=FALSE, message=TRUE}
+
+datatable(proc_means(met.df, vars = "shbg", by = "shbg_assay_method", 
+                     n=TRUE, nmiss = TRUE, mean=TRUE,  
+                     sd = TRUE, min = TRUE, max = TRUE, 
+                     median = TRUE, q1 = TRUE, q3 = TRUE), 
+          rownames = FALSE, 
+          options = list(dom = 't', 
+                         columnDefs = list(list(className = 'dt-center', targets = "_all"))),
+          caption = "Metabolic")
+datatable(proc_means(rep.df, vars = "shbg", by = "shbg_assay_method", 
+                     n=TRUE, nmiss = TRUE, mean=TRUE,  
+                     sd = TRUE, min = TRUE, max = TRUE, 
+                     median = TRUE, q1 = TRUE, q3 = TRUE), 
+          rownames = FALSE, 
+          options = list(dom = 't', 
+                         columnDefs = list(list(className = 'dt-center', targets = "_all"))),
+          caption = "Reproductive")
+datatable(proc_means(int.df, vars = "shbg", by = "shbg_assay_method", 
+                     n=TRUE, nmiss = TRUE, mean=TRUE,  
+                     sd = TRUE, min = TRUE, max = TRUE, 
+                     median = TRUE, q1 = TRUE, q3 = TRUE), 
+          rownames = FALSE, 
+          options = list(dom = 't', 
+                         columnDefs = list(list(className = 'dt-center', targets = "_all"))),
+          caption = "Intermediate")
+
+```
+
+#### DHEAS
+```{r assay_methods_dheas, eval=TRUE, echo=FALSE, error=FALSE, message=TRUE}
+
+datatable(proc_means(met.df, vars = "dheas", by = "dheas_assay_method", 
+                     n=TRUE, nmiss = TRUE, mean=TRUE,  
+                     sd = TRUE, min = TRUE, max = TRUE, 
+                     median = TRUE, q1 = TRUE, q3 = TRUE), 
+          rownames = FALSE, 
+          options = list(dom = 't', 
+                         columnDefs = list(list(className = 'dt-center', targets = "_all"))),
+          caption = "Metabolic")
+datatable(proc_means(rep.df, vars = "dheas", by = "dheas_assay_method", 
+                     n=TRUE, nmiss = TRUE, mean=TRUE,  
+                     sd = TRUE, min = TRUE, max = TRUE, 
+                     median = TRUE, q1 = TRUE, q3 = TRUE), 
+          rownames = FALSE, 
+          options = list(dom = 't', 
+                         columnDefs = list(list(className = 'dt-center', targets = "_all"))),
+          caption = "Reproductive")
+datatable(proc_means(int.df, vars = "dheas", by = "dheas_assay_method", 
+                     n=TRUE, nmiss = TRUE, mean=TRUE,  
+                     sd = TRUE, min = TRUE, max = TRUE, 
+                     median = TRUE, q1 = TRUE, q3 = TRUE), 
+          rownames = FALSE, 
+          options = list(dom = 't', 
+                         columnDefs = list(list(className = 'dt-center', targets = "_all"))),
+          caption = "Intermediate")
+
+```
+
+
+#### LH
+```{r assay_methods_lh, eval=TRUE, echo=FALSE, error=FALSE, message=TRUE}
+
+datatable(proc_means(met.df, vars = "lh", by = "lh_assay_method", 
+                     n=TRUE, nmiss = TRUE, mean=TRUE,  
+                     sd = TRUE, min = TRUE, max = TRUE, 
+                     median = TRUE, q1 = TRUE, q3 = TRUE), 
+          rownames = FALSE, 
+          options = list(dom = 't', 
+                         columnDefs = list(list(className = 'dt-center', targets = "_all"))),
+          caption = "Metabolic")
+datatable(proc_means(rep.df, vars = "lh", by = "lh_assay_method", 
+                     n=TRUE, nmiss = TRUE, mean=TRUE,  
+                     sd = TRUE, min = TRUE, max = TRUE, 
+                     median = TRUE, q1 = TRUE, q3 = TRUE), 
+          rownames = FALSE, 
+          options = list(dom = 't', 
+                         columnDefs = list(list(className = 'dt-center', targets = "_all"))),
+          caption = "Reproductive")
+datatable(proc_means(int.df, vars = "lh", by = "lh_assay_method", 
+                     n=TRUE, nmiss = TRUE, mean=TRUE,  
+                     sd = TRUE, min = TRUE, max = TRUE, 
+                     median = TRUE, q1 = TRUE, q3 = TRUE), 
+          rownames = FALSE, 
+          options = list(dom = 't', 
+                         columnDefs = list(list(className = 'dt-center', targets = "_all"))),
+          caption = "Intermediate ")
+
+```
+
+#### fsh
+```{r assay_methods_fsh, eval=TRUE, echo=FALSE, error=FALSE, message=TRUE}
+
+datatable(proc_means(met.df, vars = "fsh", by = "fsh_assay_method", 
+                     n=TRUE, nmiss = TRUE, mean=TRUE,  
+                     sd = TRUE, min = TRUE, max = TRUE, 
+                     median = TRUE, q1 = TRUE, q3 = TRUE), 
+          rownames = FALSE, 
+          options = list(dom = 't', 
+                         columnDefs = list(list(className = 'dt-center', targets = "_all"))),
+          caption = "Metabolic")
+datatable(proc_means(rep.df, vars = "fsh", by = "fsh_assay_method", 
+                     n=TRUE, nmiss = TRUE, mean=TRUE,  
+                     sd = TRUE, min = TRUE, max = TRUE, 
+                     median = TRUE, q1 = TRUE, q3 = TRUE), 
+          rownames = FALSE, 
+          options = list(dom = 't', 
+                         columnDefs = list(list(className = 'dt-center', targets = "_all"))),
+          caption = "Reproductive")
+datatable(proc_means(int.df, vars = "fsh", by = "fsh_assay_method", 
+                     n=TRUE, nmiss = TRUE, mean=TRUE,  
+                     sd = TRUE, min = TRUE, max = TRUE, 
+                     median = TRUE, q1 = TRUE, q3 = TRUE), 
+          rownames = FALSE, 
+          options = list(dom = 't', 
+                         columnDefs = list(list(className = 'dt-center', targets = "_all"))),
+          caption = "Intermediate")
+
+```
+
+#### Fasting Insulin
+```{r assay_methods_i0, eval=TRUE, echo=FALSE, error=FALSE, message=TRUE}
+
+datatable(proc_means(met.df, vars = "i0", by = "i0_assay_method", 
+                     n=TRUE, nmiss = TRUE, mean=TRUE,  
+                     sd = TRUE, min = TRUE, max = TRUE, 
+                     median = TRUE, q1 = TRUE, q3 = TRUE), 
+          rownames = FALSE, 
+          options = list(dom = 't', 
+                         columnDefs = list(list(className = 'dt-center', targets = "_all"))),
+          caption = "Metabolic")
+datatable(proc_means(rep.df, vars = "i0", by = "i0_assay_method", 
+                     n=TRUE, nmiss = TRUE, mean=TRUE,  
+                     sd = TRUE, min = TRUE, max = TRUE, 
+                     median = TRUE, q1 = TRUE, q3 = TRUE), 
+          rownames = FALSE, 
+          options = list(dom = 't', 
+                         columnDefs = list(list(className = 'dt-center', targets = "_all"))),
+          caption = "Reproductive")
+datatable(proc_means(int.df, vars = "i0", by = "i0_assay_method", 
+                     n=TRUE, nmiss = TRUE, mean=TRUE,  
+                     sd = TRUE, min = TRUE, max = TRUE, 
+                     median = TRUE, q1 = TRUE, q3 = TRUE), 
+          rownames = FALSE, 
+          options = list(dom = 't', 
+                         columnDefs = list(list(className = 'dt-center', targets = "_all"))),
+          caption = "Intermediate")
+
+```
+
+#### Fasting Glucose
+```{r assay_methods_g0, eval=TRUE, echo=FALSE, error=FALSE, message=TRUE}
+
+datatable(proc_means(met.df, vars = "g0", by = "g0_assay_method", 
+                     n=TRUE, nmiss = TRUE, mean=TRUE,  
+                     sd = TRUE, min = TRUE, max = TRUE, 
+                     median = TRUE, q1 = TRUE, q3 = TRUE), 
+          rownames = FALSE, 
+          options = list(dom = 't', 
+                         columnDefs = list(list(className = 'dt-center', targets = "_all"))),
+          caption = "Metabolic")
+datatable(proc_means(rep.df, vars = "g0", by = "g0_assay_method", 
+                     n=TRUE, nmiss = TRUE, mean=TRUE,  
+                     sd = TRUE, min = TRUE, max = TRUE, 
+                     median = TRUE, q1 = TRUE, q3 = TRUE), 
+          rownames = FALSE, 
+          options = list(dom = 't', 
+                         columnDefs = list(list(className = 'dt-center', targets = "_all"))),
+          caption = "Reproductive")
+datatable(proc_means(int.df, vars = "g0", by = "g0_assay_method", 
+                     n=TRUE, nmiss = TRUE, mean=TRUE,  
+                     sd = TRUE, min = TRUE, max = TRUE, 
+                     median = TRUE, q1 = TRUE, q3 = TRUE), 
+          rownames = FALSE, 
+          options = list(dom = 't', 
+                         columnDefs = list(list(className = 'dt-center', targets = "_all"))),
+          caption = "Intermediate")
+
+```
+
+#### AMH
+```{r assay_methods_amh, eval=TRUE, echo=FALSE, error=FALSE, message=TRUE}
+
+datatable(proc_means(met.df, vars = "amh", by = "amh_assay_method", 
+                     n=TRUE, nmiss = TRUE, mean=TRUE,  
+                     sd = TRUE, min = TRUE, max = TRUE, 
+                     median = TRUE, q1 = TRUE, q3 = TRUE), 
+          rownames = FALSE, 
+          options = list(dom = 't', 
+                         columnDefs = list(list(className = 'dt-center', targets = "_all"))),
+          caption = "Metabolic")
+datatable(proc_means(rep.df, vars = "amh", by = "amh_assay_method", 
+                     n=TRUE, nmiss = TRUE, mean=TRUE,  
+                     sd = TRUE, min = TRUE, max = TRUE, 
+                     median = TRUE, q1 = TRUE, q3 = TRUE), 
+          rownames = FALSE, 
+          options = list(dom = 't', 
+                         columnDefs = list(list(className = 'dt-center', targets = "_all"))),
+          caption = "Reproductive")
+datatable(proc_means(int.df, vars = "amh", by = "amh_assay_method", 
+                     n=TRUE, nmiss = TRUE, mean=TRUE,  
+                     sd = TRUE, min = TRUE, max = TRUE, 
+                     median = TRUE, q1 = TRUE, q3 = TRUE), 
+          rownames = FALSE, 
+          options = list(dom = 't', 
+                         columnDefs = list(list(className = 'dt-center', targets = "_all"))),
+          caption = "Intermediate")
+
+```
+
+```{r relabel_9trait_results, eval=TRUE, echo=FALSE, error=FALSE, message=TRUE}
+
+##~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+##  Save Data into New Variable from Clustering Output to Use for Comparison----
+##~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+clusters_nine <- clusters
+```
+
+```{r rename_input_dataset, eval=TRUE, echo=FALSE, error=FALSE, message=FALSE}
+##~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+##                        Rename No AMH Input Data Frame                    ----
+##~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+m.df2 <- m.df.noamh
+
+#...............................................................................
+#...............................................................................
+#...............................................................................
+#                                                                              .
+#  Clustering With 8 Traits Repeats Same Steps as Above                        .
+#                                                                              .
+#...............................................................................
+#...............................................................................
+#...............................................................................
+```
+
+***
+***
+## Clustering with 8 Traits
+  
+***
+***
+### Correlation plot of clustering variables
+```{r correlation_eight, eval=TRUE, echo=FALSE, error=FALSE, message=TRUE}
+corrplot(cor(m.df2[3:10]), method = 'number', type = 'lower')
+```
+
+
+
+```{r perform_clustering_8, eval=TRUE, echo=FALSE, error=FALSE, message=TRUE}
+## Hierarchical clustering on the columns
+cluster_matrix <- as.matrix(na.omit(m.df2[, var_labels_8]))
+hc <- hclust(dist(cluster_matrix, method=dist_metric), method=clust_method)
+
+## Hierarchical clustering on the rows
+df.12 <- as.matrix(na.omit(m.df2[, var_labels_8]))
+row_hc <- hclust(dist(t(df.12), method=dist_metric), method=clust_method)
+
+## Define clusters (k=3 means we define 3 clusters)
+mycl <- cutree(hc, k=3)
+
+## Get clustering stats
+stats <- cluster.stats(dist(cluster_matrix, method=dist_metric), mycl)
+
+## Add the cluster ID# to your data and relabel the clusters
+clusters <- as.data.frame(cbind(cluster_matrix, cluster_id=mycl))
+
+```
+
+```{r relabel_clusters_8, eval=TRUE, echo=FALSE, error=FALSE, message=TRUE}
+clus.BMI.avg <- clusters %>%
+  group_by(cluster_id) %>%
+  summarise(BMI = mean(BMI))
+met <- which.max(clus.BMI.avg$BMI)
+clus.SHBG.avg <- clusters %>%
+  group_by(cluster_id) %>%
+  summarise(SHBG = mean(SHBG))
+rep <- which.max(clus.SHBG.avg$SHBG)
+clusters$cluster_new <- ifelse(clusters$cluster_id==met, 10,
+                               ifelse(clusters$cluster_id==rep, 11, 12))
+clusters$cluster_id <- ifelse(clusters$cluster_new==10, 1,
+                              ifelse(clusters$cluster_new==11, 2, 3))
+
+clusters$cluster_new = NULL  ## remove this temporary column
+clusters$group <- ifelse(clusters$cluster_id==1, "Metabolic",
+                         ifelse(clusters$cluster_id==2, "Reproductive", "Indeterminate"))
+
+
+## Apply updated cluster ID's an updated variable 'mycl_upd' that was generated from the 
+## cuttree function after pruning to 3 from the hierarchical clustering
+mycl_upd <- clusters$cluster_id
+```
+
+```{r clustering_stats_8, eval=TRUE, echo=FALSE, error=FALSE, message=TRUE}
+stats <- cluster.stats(dist(cluster_matrix, method=dist_metric), mycl_upd)
+
+
+```
+***
+***
+  
+### Hierarchical Clustering Heatmap
+```{r heatmap_8, eval=TRUE, echo=FALSE, error=FALSE, message=TRUE}
+## Get a color palette equal to the number of clusters
+## These colors may need to be reordered based on subtype
+cluster_colors <- c("#CF4D40D9","#5480C4FF",'grey') 
+
+
+## Create vector of colors for side bar, declare colors to be used in heat map
+myClusterSideBar <- cluster_colors[mycl_upd]
+colors = c(seq(-4.401,-1.201,length=40), seq(-1.2,1.2,length=30),
+           seq(1.201,4.401,length=40))
+my_palette <- colorRampPalette(c("blue", "white", "red"))(n = 109)
+
+## Draw the heat map
+heatmap.2(t(cluster_matrix),
+          main=paste0("MEGA_Controls\nn=", dim(cluster_matrix)[1]), revC=T,
+          Rowv=as.dendrogram(row_hc), Colv=as.dendrogram(hc), dendrogram="both",
+          trace="none", col=my_palette,
+          ColSideColors=myClusterSideBar, key=TRUE, key.title='', key.xlab='',
+          margins=c(2,6),
+          labCol='', symm=F, symkey=F, symbreaks=F, breaks=colors)
+
+```
+
+```{r jaccard_8, eval=TRUE, echo=FALSE, error=FALSE, message=FALSE, results='hide'}
+##  Run clusterboot() with hclust to determine cluster stability
+cboot.hclust <- clusterboot(dist(cluster_matrix, method=dist_metric),
+                            B=1000, clustermethod=disthclustCBI,
+                            method=clust_method, k=3)
+
+
+# Relabel bootmean values as these are based off ordering in the original cluster ID labels.
+jaccard_score <- as.list(cboot.hclust$bootmean)
+
+```
+
+***
+### Hierarchical Clustering Summary
+```{r table_clust_8, eval=TRUE, echo=FALSE, error=FALSE, message=TRUE}
+tab_cnt <- c(sum(mycl_upd == 1), sum(mycl_upd == 2), sum(mycl_upd == 3))
+
+tab_perc <- c(round(sum(mycl_upd == 1)/length(mycl_upd),4)*100, 
+              round(sum(mycl_upd == 2)/length(mycl_upd),4)*100, 
+              round(sum(mycl_upd == 3)/length(mycl_upd),4)*100)
+
+tab_jac <- c(jaccard_score[met], 
+             jaccard_score[rep], 
+             jaccard_score[-c(met, rep)])
+
+tab_jac <- lapply(tab_jac, round, 2)
+
+tab <- rbind(tab_cnt, tab_perc, tab_jac)
+colnames(tab) <- c('Metabolic', 'Reproductive', 'Indeterminate')
+rownames(tab) <- c('Count', 'Percent', 'Jaccard Index')
+
+datatable(tab, options = list(dom = 't', columnDefs = list(list(className = 'dt-center', targets = "_all"))))
+```
+
+***
+### Boxplots of Normalized Traits by Cluster
+```{r boxplots_8, eval=TRUE, echo=FALSE, error=FALSE, message=FALSE, warning=FALSE, out.width= "110%"}
+################################################
+# Boxplots of the traits by cluster            #
+################################################
+
+## Merge the sample_ids
+clusters <- merge(clusters, m.df2, by=var_labels_8)
+clusters.df <- clusters
+
+hc.melt <- melt(clusters[1:9], id.var = "cluster_id")
+
+sorted_vars <- var_labels
+plot_labels <- c('Ins0', 'BMI', 'Glu0', 'DHEAS', 'T', 'FSH', 'LH', 'SHBG')
+hc.melt$variable <- factor(hc.melt$variable, levels = c('Ins0', 'BMI', 'Glu0', 'DHEAS', 'T', 'FSH', 'LH', 'SHBG'))
+
+
+ggplot(data = hc.melt, aes(x=variable, y=value, fill=as.factor(cluster_id))) + geom_boxplot(outlier.shape = NA, coef = 0) +
+  scale_fill_manual(labels = c("Metabolic", "Reproductive", "Indeterminate"), values=c(rgb(0.81,0.3,0.25,.85), rgb(.33,.5,.77,1), 'grey'), name = "") + ylim(-2,2) + 
+  theme_bw() +
+  theme(legend.position = "bottom", legend.box = "horizontal", 
+        axis.title.x=element_blank()) + ylab("Z")
+
+
+```
+
+
+```{r stats_plots_8, eval=TRUE, echo=FALSE, error=FALSE, message=FALSE, warning=FALSE}
+trait.violin.stats(clusters, BMI)
+trait.violin.stats(clusters, T)
+trait.violin.stats(clusters, SHBG)
+trait.violin.stats(clusters, DHEAS)
+trait.violin.stats(clusters, LH)
+trait.violin.stats(clusters, FSH)
+trait.violin.stats(clusters, Ins0)
+trait.violin.stats(clusters, Glu0)
+```
+
+
+
+```{r updatelabel_8, eval=TRUE, echo=FALSE, error=FALSE, message=TRUE}
+## Re-order the data frame
+col_idx <- grep("cluster_id", names(clusters))
+clusters <- clusters[, c(col_idx, (1:ncol(clusters))[-col_idx])]
+col_idx <- grep(sample, names(clusters))
+clusters <- clusters[, c(col_idx, (1:ncol(clusters))[-col_idx])]
+
+
+
+```
+
+***
+### Radar Plot of Normalized Traits by Cluster
+```{r radarplot_8, eval=TRUE, echo=FALSE, error=FALSE, message=TRUE}
+# radar.df <- clusters %>%
+#   group_by(group) %>%
+#   summarise(across(BMI:FSH, mean))
+# 
+# radar_order <- c('group', 'Ins0', 'BMI', 'Glu0', 'DHEAS', 'T', 'LH', 'FSH', 'SHBG')
+# radar.df <- radar.df[, radar_order]
+# 
+# ggradar(
+#    radar.df, 
+#    font.radar = "sans",
+#    values.radar = c("-1.5", "0", "1.5"),
+#    grid.min = -1.5, grid.mid = 0, grid.max = 1.5,
+#    # Polygons
+#    group.line.width = 1, 
+#    group.point.size = 1,
+#    group.colours = c('grey', rgb(0.81,0.3,0.25,.85), rgb(.33,.5,.77,1)),
+#    background.circle.colour = "white",
+#    gridline.mid.colour = "black",
+#    legend.position = "bottom"
+#  )
+```
+
+
+***
+  
+  
+### PCA Plot of Cluster Results
+```{r pca_plots_8, eval=TRUE, echo=FALSE, error=FALSE, message=TRUE}
+
+
+
+################################################
+# PCA plots overlay the clusters               #
+################################################
+
+### PCA PLOT ###
+clusters$cluster_id <- as.factor(clusters$cluster_id)
+clusters$group <- ifelse(clusters$cluster_id==1, "Metabolic", ifelse(clusters$cluster_id==2, "Reproductive", "Indeterminate"))
+
+pca <- PCA(clusters[3:9], graph = F)
+
+# If plot is mirrored from example, multiply PC1 by -1 to reverse image to
+# maintain consistency.
+
+#pca$ind$coord[,1] <- pca$ind$coord[,1]*-1
+#pca$var$coord[,1] <- pca$var$coord[,1]*-1
+
+fviz_pca_biplot(pca, col.ind = clusters$group, palette = c('grey', rgb(0.81,0.3,0.25,.85), rgb(.33,.5,.77,1)),
+                addEllipses = TRUE, label = "var", col.var = "black", repel = TRUE,
+                legend.title = "Subtype", pointsize=2,#pointshape=19,
+                xlab = paste("PC1 (", round(pca$eig[1,2],2), '%)', sep=''),
+                ylab = paste("PC2 (", round(pca$eig[2,2],2), '%)', sep=''),
+                title = "")
+
+
+
+```
+
+***
+  
+### Summary of Normalized Traits by Cluster
+```{r clusters_by_traits_8, eval=TRUE, echo=FALSE, error=FALSE, message=TRUE, results = "asis"}
+z_summary <-
+  list("BMI" =
+         list("median (IQR)" = ~ qwraps2::median_iqr(BMI),
+              "mean (sd)" = ~ qwraps2::mean_sd(BMI)),
+       "Testosterone" =
+         list("median (IQR)" = ~ qwraps2::median_iqr(T),
+              "mean (sd)" = ~ qwraps2::mean_sd(T)),
+       "SHBG" =
+         list("median (IQR)" = ~ qwraps2::median_iqr(SHBG),
+              "mean (sd)" = ~ qwraps2::mean_sd(SHBG)),
+       "DHEAS" =
+         list("median (IQR)" = ~ qwraps2::median_iqr(DHEAS),
+              "mean (sd)" = ~ qwraps2::mean_sd(DHEAS)),
+       "LH" =
+         list("median (IQR)" = ~ qwraps2::median_iqr(LH),
+              "mean (sd)" = ~ qwraps2::mean_sd(LH)),
+       "FSH" =
+         list("median (IQR)" = ~ qwraps2::median_iqr(FSH),
+              "mean (sd)" = ~ qwraps2::mean_sd(FSH)),
+       "Fasting Insulin" =
+         list("median (IQR)" = ~ qwraps2::median_iqr(Ins0),
+              "mean (sd)" = ~ qwraps2::mean_sd(Ins0)),
+       "Fasting Glucose" =
+         list("median (IQR)" = ~ qwraps2::median_iqr(Glu0),
+              "mean (sd)" = ~ qwraps2::mean_sd(Glu0))
+  )
+
+clusters_summary_table <- summary_table(dplyr::group_by(clusters, cluster_id), z_summary)
+
+print(clusters_summary_table,
+      rtitle = "Summary Statistics by Cluster",
+      cnames = c("Metabolic", "Reproductive", "Intermediate"))
+```
+
+***
+  
+### Summary of Raw Trait Values by Cluster and Assay Method
+#### Testosterone
+```{r assay_methods_t_8, eval=TRUE, echo=FALSE, error=FALSE, message=TRUE}
+
+clust.df.tmp <- clusters.df[, c('sample_id', 'cluster_id', 'group')]
+clust.df <- merge(m.df, clust.df.tmp, by = 'sample_id' )
+met.df <- clust.df[clust.df$cluster_id == 1,]
+rep.df <- clust.df[clust.df$cluster_id == 2,]
+int.df <- clust.df[clust.df$cluster_id == 3,]
+
+
+datatable(proc_means(met.df, vars = "T", by = "T_assay_method", 
+                     n=TRUE, nmiss = TRUE, mean=TRUE,  
+                     sd = TRUE, min = TRUE, max = TRUE, 
+                     median = TRUE, q1 = TRUE, q3 = TRUE), 
+          rownames = FALSE, 
+          options = list(dom = 't', 
+                         columnDefs = list(list(className = 'dt-center', targets = "_all"))),
+          caption = "Metabolic")
+datatable(proc_means(rep.df, vars = "T", by = "T_assay_method", 
+                     n=TRUE, nmiss = TRUE, mean=TRUE,  
+                     sd = TRUE, min = TRUE, max = TRUE, 
+                     median = TRUE, q1 = TRUE, q3 = TRUE), 
+          rownames = FALSE, 
+          options = list(dom = 't', 
+                         columnDefs = list(list(className = 'dt-center', targets = "_all"))),
+          caption = "Reproductive")
+datatable(proc_means(int.df, vars = "T", by = "T_assay_method", 
+                     n=TRUE, nmiss = TRUE, mean=TRUE,  
+                     sd = TRUE, min = TRUE, max = TRUE, 
+                     median = TRUE, q1 = TRUE, q3 = TRUE), 
+          rownames = FALSE, 
+          options = list(dom = 't', 
+                         columnDefs = list(list(className = 'dt-center', targets = "_all"))),
+          caption = "Intermediate")
+
+```
+
+
+#### SHBG
+```{r assay_methods_shbg_8, eval=TRUE, echo=FALSE, error=FALSE, message=TRUE}
+
+datatable(proc_means(met.df, vars = "shbg", by = "shbg_assay_method", 
+                     n=TRUE, nmiss = TRUE, mean=TRUE,  
+                     sd = TRUE, min = TRUE, max = TRUE, 
+                     median = TRUE, q1 = TRUE, q3 = TRUE), 
+          rownames = FALSE, 
+          options = list(dom = 't', 
+                         columnDefs = list(list(className = 'dt-center', targets = "_all"))),
+          caption = "Metabolic")
+datatable(proc_means(rep.df, vars = "shbg", by = "shbg_assay_method", 
+                     n=TRUE, nmiss = TRUE, mean=TRUE,  
+                     sd = TRUE, min = TRUE, max = TRUE, 
+                     median = TRUE, q1 = TRUE, q3 = TRUE), 
+          rownames = FALSE, 
+          options = list(dom = 't', 
+                         columnDefs = list(list(className = 'dt-center', targets = "_all"))),
+          caption = "Reproductive")
+datatable(proc_means(int.df, vars = "shbg", by = "shbg_assay_method", 
+                     n=TRUE, nmiss = TRUE, mean=TRUE,  
+                     sd = TRUE, min = TRUE, max = TRUE, 
+                     median = TRUE, q1 = TRUE, q3 = TRUE), 
+          rownames = FALSE, 
+          options = list(dom = 't', 
+                         columnDefs = list(list(className = 'dt-center', targets = "_all"))),
+          caption = "Intermediate")
+
+```
+
+#### DHEAS
+```{r assay_methods_dheas_8, eval=TRUE, echo=FALSE, error=FALSE, message=TRUE}
+
+datatable(proc_means(met.df, vars = "dheas", by = "dheas_assay_method", 
+                     n=TRUE, nmiss = TRUE, mean=TRUE,  
+                     sd = TRUE, min = TRUE, max = TRUE, 
+                     median = TRUE, q1 = TRUE, q3 = TRUE), 
+          rownames = FALSE, 
+          options = list(dom = 't', 
+                         columnDefs = list(list(className = 'dt-center', targets = "_all"))),
+          caption = "Metabolic")
+datatable(proc_means(rep.df, vars = "dheas", by = "dheas_assay_method", 
+                     n=TRUE, nmiss = TRUE, mean=TRUE,  
+                     sd = TRUE, min = TRUE, max = TRUE, 
+                     median = TRUE, q1 = TRUE, q3 = TRUE), 
+          rownames = FALSE, 
+          options = list(dom = 't', 
+                         columnDefs = list(list(className = 'dt-center', targets = "_all"))),
+          caption = "Reproductive")
+datatable(proc_means(int.df, vars = "dheas", by = "dheas_assay_method", 
+                     n=TRUE, nmiss = TRUE, mean=TRUE,  
+                     sd = TRUE, min = TRUE, max = TRUE, 
+                     median = TRUE, q1 = TRUE, q3 = TRUE), 
+          rownames = FALSE, 
+          options = list(dom = 't', 
+                         columnDefs = list(list(className = 'dt-center', targets = "_all"))),
+          caption = "Intermediate")
+
+```
+
+
+#### LH
+```{r assay_methods_lh_8, eval=TRUE, echo=FALSE, error=FALSE, message=TRUE}
+
+datatable(proc_means(met.df, vars = "lh", by = "lh_assay_method", 
+                     n=TRUE, nmiss = TRUE, mean=TRUE,  
+                     sd = TRUE, min = TRUE, max = TRUE, 
+                     median = TRUE, q1 = TRUE, q3 = TRUE), 
+          rownames = FALSE, 
+          options = list(dom = 't', 
+                         columnDefs = list(list(className = 'dt-center', targets = "_all"))),
+          caption = "Metabolic")
+datatable(proc_means(rep.df, vars = "lh", by = "lh_assay_method", 
+                     n=TRUE, nmiss = TRUE, mean=TRUE,  
+                     sd = TRUE, min = TRUE, max = TRUE, 
+                     median = TRUE, q1 = TRUE, q3 = TRUE), 
+          rownames = FALSE, 
+          options = list(dom = 't', 
+                         columnDefs = list(list(className = 'dt-center', targets = "_all"))),
+          caption = "Reproductive")
+datatable(proc_means(int.df, vars = "lh", by = "lh_assay_method", 
+                     n=TRUE, nmiss = TRUE, mean=TRUE,  
+                     sd = TRUE, min = TRUE, max = TRUE, 
+                     median = TRUE, q1 = TRUE, q3 = TRUE), 
+          rownames = FALSE, 
+          options = list(dom = 't', 
+                         columnDefs = list(list(className = 'dt-center', targets = "_all"))),
+          caption = "Intermediate ")
+
+```
+
+#### fsh
+```{r assay_methods_fsh_8, eval=TRUE, echo=FALSE, error=FALSE, message=TRUE}
+
+datatable(proc_means(met.df, vars = "fsh", by = "fsh_assay_method", 
+                     n=TRUE, nmiss = TRUE, mean=TRUE,  
+                     sd = TRUE, min = TRUE, max = TRUE, 
+                     median = TRUE, q1 = TRUE, q3 = TRUE), 
+          rownames = FALSE, 
+          options = list(dom = 't', 
+                         columnDefs = list(list(className = 'dt-center', targets = "_all"))),
+          caption = "Metabolic")
+datatable(proc_means(rep.df, vars = "fsh", by = "fsh_assay_method", 
+                     n=TRUE, nmiss = TRUE, mean=TRUE,  
+                     sd = TRUE, min = TRUE, max = TRUE, 
+                     median = TRUE, q1 = TRUE, q3 = TRUE), 
+          rownames = FALSE, 
+          options = list(dom = 't', 
+                         columnDefs = list(list(className = 'dt-center', targets = "_all"))),
+          caption = "Reproductive")
+datatable(proc_means(int.df, vars = "fsh", by = "fsh_assay_method", 
+                     n=TRUE, nmiss = TRUE, mean=TRUE,  
+                     sd = TRUE, min = TRUE, max = TRUE, 
+                     median = TRUE, q1 = TRUE, q3 = TRUE), 
+          rownames = FALSE, 
+          options = list(dom = 't', 
+                         columnDefs = list(list(className = 'dt-center', targets = "_all"))),
+          caption = "Intermediate")
+
+```
+
+#### Fasting Insulin
+```{r assay_methods_i0_8, eval=TRUE, echo=FALSE, error=FALSE, message=TRUE}
+
+datatable(proc_means(met.df, vars = "i0", by = "i0_assay_method", 
+                     n=TRUE, nmiss = TRUE, mean=TRUE,  
+                     sd = TRUE, min = TRUE, max = TRUE, 
+                     median = TRUE, q1 = TRUE, q3 = TRUE), 
+          rownames = FALSE, 
+          options = list(dom = 't', 
+                         columnDefs = list(list(className = 'dt-center', targets = "_all"))),
+          caption = "Metabolic")
+datatable(proc_means(rep.df, vars = "i0", by = "i0_assay_method", 
+                     n=TRUE, nmiss = TRUE, mean=TRUE,  
+                     sd = TRUE, min = TRUE, max = TRUE, 
+                     median = TRUE, q1 = TRUE, q3 = TRUE), 
+          rownames = FALSE, 
+          options = list(dom = 't', 
+                         columnDefs = list(list(className = 'dt-center', targets = "_all"))),
+          caption = "Reproductive")
+datatable(proc_means(int.df, vars = "i0", by = "i0_assay_method", 
+                     n=TRUE, nmiss = TRUE, mean=TRUE,  
+                     sd = TRUE, min = TRUE, max = TRUE, 
+                     median = TRUE, q1 = TRUE, q3 = TRUE), 
+          rownames = FALSE, 
+          options = list(dom = 't', 
+                         columnDefs = list(list(className = 'dt-center', targets = "_all"))),
+          caption = "Intermediate")
+
+```
+
+#### Fasting Glucose
+```{r assay_methods_g0_8, eval=TRUE, echo=FALSE, error=FALSE, message=TRUE}
+
+datatable(proc_means(met.df, vars = "g0", by = "g0_assay_method", 
+                     n=TRUE, nmiss = TRUE, mean=TRUE,  
+                     sd = TRUE, min = TRUE, max = TRUE, 
+                     median = TRUE, q1 = TRUE, q3 = TRUE), 
+          rownames = FALSE, 
+          options = list(dom = 't', 
+                         columnDefs = list(list(className = 'dt-center', targets = "_all"))),
+          caption = "Metabolic")
+datatable(proc_means(rep.df, vars = "g0", by = "g0_assay_method", 
+                     n=TRUE, nmiss = TRUE, mean=TRUE,  
+                     sd = TRUE, min = TRUE, max = TRUE, 
+                     median = TRUE, q1 = TRUE, q3 = TRUE), 
+          rownames = FALSE, 
+          options = list(dom = 't', 
+                         columnDefs = list(list(className = 'dt-center', targets = "_all"))),
+          caption = "Reproductive")
+datatable(proc_means(int.df, vars = "g0", by = "g0_assay_method", 
+                     n=TRUE, nmiss = TRUE, mean=TRUE,  
+                     sd = TRUE, min = TRUE, max = TRUE, 
+                     median = TRUE, q1 = TRUE, q3 = TRUE), 
+          rownames = FALSE, 
+          options = list(dom = 't', 
+                         columnDefs = list(list(className = 'dt-center', targets = "_all"))),
+          caption = "Intermediate")
+
+```
+
+
+## Comparison of Subtyping with 8 & 9 Traits
+```{r comparisons_between_methods, eval=TRUE, echo=FALSE, error=FALSE, message=TRUE}
+
+##~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+##           Compare Results Between Clustering Using 8 and 9 Traits        ----
+##~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+## Table for Both Sets of Outputs Side by Side
+tab_comb <- cbind(tab, tab_nine)
+colnames(tab_comb) <- c('Metabolic 8 Traits', 'Reproductive 8 Traits', 
+                        'Indeterminate 8 Traits', 'Metabolic 9 Traits', 
+                        'Reproductive 9 Traits', 'Indeterminate 9 Traits')
+datatable(tab_comb, options = list(dom = 't', columnDefs = list(list(className = 'dt-center', targets = "_all"))))
+
+## Prepare Data for Input for Plot to show where samples reclustered 
+cluster_ids_eight <- clusters[colnames(clusters) %in% c('sample_id', 'group')]
+colnames(cluster_ids_eight) <- c('sample_id', 'clusters_8trait')
+cluster_ids_nine <- clusters_nine[colnames(clusters_nine) %in% c('sample_id', 'group')]
+colnames(cluster_ids_nine) <- c('sample_id', 'clusters_9trait')
+cluster_ids_comb <- merge(cluster_ids_eight, cluster_ids_nine, by = 'sample_id')
+
+## Cross table to see counts of which clusters remained consistent and where samples
+## moved. 
+CrossTable(cluster_ids_comb$clusters_8trait, cluster_ids_comb$clusters_9trait, digits=2, prop.r = TRUE, prop.c =TRUE,
+           prop.t= FALSE, prop.chisq = FALSE, chisq =FALSE, fisher =FALSE, missing.include=FALSE)
+
+## Visualize the change in clusters when using different number of traits.
+CGPfunctions::PlotXTabs(cluster_ids_comb, 3,2, "stack")
+
+
+```
+
+```{r session_info}
+     #                    Write Out Session Info                   ~~~
+     #~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+library(devtools)
+devtools::session_info()
+```
+
+```{r write_cluster_groups}
+     #                   Write Out Results Files                   ~~~
+     #~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+write.table(clusters_nine, cluster_results_9traits)
+write.table(clusters, cluster_results_8traits)
+```
+
