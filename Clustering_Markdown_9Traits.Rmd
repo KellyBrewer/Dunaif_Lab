@@ -517,10 +517,10 @@ clus.BMI.avg <- clusters %>%
   group_by(cluster_id) %>%
   summarise(BMI = mean(BMI))
 met <- which.max(clus.BMI.avg$BMI)
-clus.SHBG.avg <- clusters %>%
+clus.LH.avg <- clusters %>%
   group_by(cluster_id) %>%
-  summarise(SHBG = mean(SHBG))
-rep <- which.max(clus.SHBG.avg$SHBG)
+  summarise(LH = mean(LH))
+rep <- which.max(clus.LH.avg$LH)
 clusters$cluster_new <- ifelse(clusters$cluster_id==met, 10,
                                ifelse(clusters$cluster_id==rep, 11, 12))
 clusters$cluster_id <- ifelse(clusters$cluster_new==10, 1,
@@ -1122,10 +1122,10 @@ clus.BMI.avg <- clusters %>%
   group_by(cluster_id) %>%
   summarise(BMI = mean(BMI))
 met <- which.max(clus.BMI.avg$BMI)
-clus.SHBG.avg <- clusters %>%
+clus.LH.avg <- clusters %>%
   group_by(cluster_id) %>%
-  summarise(SHBG = mean(SHBG))
-rep <- which.max(clus.SHBG.avg$SHBG)
+  summarise(LH = mean(LH))
+rep <- which.max(clus.LH.avg$LH)
 clusters$cluster_new <- ifelse(clusters$cluster_id==met, 10,
                                ifelse(clusters$cluster_id==rep, 11, 12))
 clusters$cluster_id <- ifelse(clusters$cluster_new==10, 1,
