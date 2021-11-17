@@ -567,7 +567,7 @@ my_palette <- colorRampPalette(c("blue", "white", "red"))(n = 109)
 
 ## Draw the heat map
 heatmap.2(t(cluster_matrix),
-          main=paste0("MEGA_Controls\nn=", dim(cluster_matrix)[1]), revC=T,
+          main=paste0("INSERT TITLE HERE\nn=", dim(cluster_matrix)[1]), revC=T,
           Rowv=as.dendrogram(row_hc), Colv=as.dendrogram(hc), dendrogram="both",
           trace="none", col=my_palette,
           ColSideColors=myClusterSideBar, key=TRUE, key.title='', key.xlab='',
@@ -1163,7 +1163,7 @@ my_palette <- colorRampPalette(c("blue", "white", "red"))(n = 109)
 
 ## Draw the heat map
 heatmap.2(t(cluster_matrix),
-          main=paste0("MEGA_Controls\nn=", dim(cluster_matrix)[1]), revC=T,
+          main=paste0("INSERT TITLE HERE\nn=", dim(cluster_matrix)[1]), revC=T,
           Rowv=as.dendrogram(row_hc), Colv=as.dendrogram(hc), dendrogram="both",
           trace="none", col=my_palette,
           ColSideColors=myClusterSideBar, key=TRUE, key.title='', key.xlab='',
