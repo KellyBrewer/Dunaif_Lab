@@ -1608,7 +1608,13 @@ CrossTable(cluster_ids_comb$clusters_8trait, cluster_ids_comb$clusters_9trait, d
            prop.t= FALSE, prop.chisq = FALSE, chisq =FALSE, fisher =FALSE, missing.include=FALSE)
 
 ## Visualize the change in clusters when using different number of traits.
-CGPfunctions::PlotXTabs(cluster_ids_comb, 3,2, "stack")
+cluster_ids_comb$clusters_8trait <-  recode(cluster_ids_comb$clusters_8trait, Metabolic = "1-Metabolic", Reproductive = "2-Reproductive", Indeterminate= "3-Indeterminate")
+cluster_ids_comb$clusters_9trait <-  recode(cluster_ids_comb$clusters_9trait, Metabolic = "1-Metabolic", Reproductive = "2-Reproductive", Indeterminate= "3-Indeterminate")
+
+ggplot(cluster_ids_comb, aes(fill = clusters_9trait, x=clusters_8trait)) +
+  geom_bar() +
+  scale_fill_manual(values = cluster_colors) +
+   ggtitle("Cluster 8 Traits vs Cluster 9 traits")
 
 
 ```
