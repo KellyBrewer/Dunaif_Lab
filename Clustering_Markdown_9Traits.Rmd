@@ -1300,7 +1300,7 @@ clusters <- clusters[, c(col_idx, (1:ncol(clusters))[-col_idx])]
 clusters$cluster_id <- as.factor(clusters$cluster_id)
 clusters$group <- ifelse(clusters$cluster_id==1, "Metabolic", ifelse(clusters$cluster_id==2, "Reproductive", "Indeterminate"))
 
-pca <- PCA(clusters[3:9], graph = F)
+pca <- PCA(clusters[3:10], graph = F)
 
 # If plot is mirrored from example, multiply PC1 by -1 to reverse image to
 # maintain consistency.
