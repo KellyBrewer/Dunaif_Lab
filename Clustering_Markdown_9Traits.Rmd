@@ -31,7 +31,6 @@ knitr::opts_chunk$set(echo = TRUE)
 ##                               Import Packages                            ----
 ##~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-library(CGPfunctions)
 library(gmodels)
 library(ggplot2)
 library(tidyverse)
