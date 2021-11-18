@@ -1,0 +1,738 @@
+---
+title: "Compare 3 Clustering methods for Method Consensus"
+author: "Kelly Brewer, HC clustering by MD and RS"
+date: "11/1/21"
+output: 
+  html_document:
+    toc: true
+    toc_depth: 3
+    df_print: paged
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+This file uses 3 clustering methods to compare which cluster group each of the PCOS cohort subjects would fall into given each of the 3 methods. Cluster methods use 8 traits and include:
+  1) Hierarchical Clustering (stats package)- connectivity-based clustering
+  2) K-means Clustering (flexclust package)- centroid-based clustering
+  3) Gaussian mixture models (ClusterR package)- distribution-based clustering
+
+***
+## Input Data Fields and Structure
+```{r read_data, eval=TRUE, echo=FALSE, error=FALSE, message=FALSE}
+library(tidyverse)
+library(ggrepel)
+library(tidymodels)
+library(reshape2)
+library(factoextra)
+library(FactoMineR)
+library(ClusterR)
+library(fpc)
+library(stats)
+library(gplots)
+library(clusterSim)
+library(describedata)
+library(lattice)
+library(corrplot)
+library(DT)
+library(ggradar)
+library(qwraps2)
+options(qwraps2_markup = "markdown")
+library(Hmisc)
+library(ggstatsplot)
+
+
+################################################
+# Functions                                    #
+################################################
+## Reverse normal transformation
+rntransform <- function(y) {
+  out <- rank(y)
+  out[is.na(y)] <- NA
+  qnorm((out - 0.5) / max(out, na.rm=T))
+}
+
+## Descriptive Stat Tables
+trait.desc.stats <- function(var, assaymethod) {
+  var.name <- substitute(var)
+  assay.name <- substitute(assaymethod)
+  datatable(proc_means(m.df, vars = as.character(var.name), by = as.character(assay.name), n=TRUE, nmiss = TRUE, mean=TRUE,
+                     sd = TRUE, min = TRUE, max = TRUE, median = TRUE,
+                     q1 = TRUE, q3 = TRUE), rownames = FALSE, 
+          options = list(dom = 't',columnDefs = list(list(className = 'dt-center', 
+                                                          targets = "_all"))))
+}
+
+#Histograms of Traits by Assay Method
+trait.plot.hist <- function(df, var, assaymethod) {
+  arg <- match.call()
+  assay.name <- substitute(assaymethod)
+  count.vec <- df[[assay.name]]
+  count <- length(unique(count.vec))
+
+  ggplot(data = subset(df, !is.na(eval(arg$var))), 
+         aes(x = eval(arg$var), group = eval(arg$assaymethod), 
+             fill = as.factor(eval(arg$assaymethod)))) + 
+    geom_histogram(bins = 30, aes(y=..density..), colour="black", fill="white") + 
+    geom_density(alpha = 0.7) + 
+    facet_wrap(~eval(arg$assaymethod), nrow = count) + xlab(substitute(var)) +
+    guides(fill=guide_legend(title="Assay Method"))
+} 
+
+#Boxplots of Traits by Assay Method
+trait.plot.box <- function(df, var, assaymethod) {  
+  arg <- match.call()
+  assay.name <- substitute(assaymethod)
+  ggplot(data = subset(df, !is.na(eval(arg$var))), 
+              aes(x = as.factor(eval(arg$assaymethod)), y = eval(arg$var), 
+                  fill = as.factor(eval(arg$assaymethod)))) + 
+    geom_boxplot(position=position_dodge(1)) + xlab("Assay Method") +
+    ylab(substitute(var)) + guides(fill=guide_legend(title="Assay Method"))
+}
+
+trait.violin.stats <- function(df, var) { 
+  var <- enquo(var)
+  ggbetweenstats(data = df, x = cluster_id, y = !!var,
+  title = "Distribution  Across Clusters", type = "p",
+  pairwise.comparisons = TRUE, # display significant pairwise comparisons
+  pairwise.annotation = "p.value", # how do you want to annotate the pairwise comparisons
+  p.adjust.method = "bonferroni" # method for adjusting p-values for multiple comparisons
+  ) + 
+    ggplot2::scale_color_manual(values = c(rgb(0.81,0.3,0.25,.85), rgb(.33,.5,.77,1), 'grey')) +
+    scale_x_discrete(labels= c('Metabolic', 'Reproductive', "Indeterminate"))
+}
+################################################
+# Variables                                    #
+################################################
+
+## Path/file of the input file, which must have columns according to
+## cluster_input_cols below.
+input_file <- "J:/endocrinology/Dunaif_Team/Dunaif_Lab/Subtyping/Clustering/GitHub/SampleData_355.txt"
+
+## Names of sample ID, age, bmi, and the other 7 traits
+sample <- 'sample_id'; age <- 'age'; bmi <- 'bmi'
+traitnames = c('T', 'dheas', 'i0', 'g0', 'shbg', 'lh', 'fsh')
+
+## variable names for displaying/plotting results
+var_labels <- c('BMI', 'T', 'DHEAS', 'Ins0', 'Glu0', 'SHBG', 'LH', 'FSH')
+
+## The assay method for each of the 7 traits is another variable, named by
+## adding a postfix to the trait name.  The postfix in our data is
+## '_assay_method'.  For example, dheas_assay_method.
+assay <- '_assay_method'
+
+## columns of the input file
+cluster_input_cols <- c(sample, age, bmi,
+                        traitnames,
+                        paste0(traitnames, assay))
+## columns of variables (some to be defined later) for clustering
+d <- '.'
+cluster_cols <- c(sample, age,
+                  paste(c(bmi, traitnames), 'z', sep=d))
+
+## Methods for distance calculation and for hierarchical clustering.
+## Our initial analysis used manhattan distance and ward.D clustering method.
+## ward.D2 is probably a better choice.
+dist_metric <- 'manhattan'
+clust_method <- 'ward.D'
+
+## Read in input file (must have columns according to cluster_input_cols)
+m.df0 <- read.delim(input_file, na.strings=c("", "#N/A", "missing"))
+str(m.df0)
+
+```
+***
+
+## Remove duplicates, outliers and missing data
+```{r remove_dupes_incomplete, eval=TRUE, echo=FALSE, error=FALSE, message=TRUE}
+## Remove duplicate entries (keep the first occurrence for each set of duplicates)
+dupidx = duplicated(m.df0[, cluster_input_cols[1:(3+length(traitnames))]])
+if(sum(dupidx)>0) warning(paste("Removing", sum(dupidx), "duplicates from data"))
+m.df <- m.df0[!dupidx,]
+
+## Only keep samples with complete, non-zero data for age and the 8 traits
+completeidx = complete.cases(m.df[, c(age, bmi, traitnames)])
+if(sum(!completeidx)>0) {
+    warning(paste("Removing", sum(!completeidx), "records due to incomplete data"))
+    for(ii in c(age, bmi, traitnames)) {
+        tmpidx = complete.cases(m.df[, ii])
+        if(sum(!tmpidx)>0) message(paste(ii, "has", sum(!tmpidx), "missing records"))
+    }
+    m.df <- m.df[completeidx, ]
+}
+
+message(paste("There are",nrow(m.df), "cases remaining in the dataset after removal of incomplete cases."))
+```
+
+***
+## Flagging Outliers and Removing
+```{r outliers_removal, eval=TRUE, echo=FALSE, error=FALSE, message=TRUE}
+
+# Create variables for removal flag flags and set them == 0
+trait.rem.flags = c()
+for (var in traitnames) {
+  names <- c(paste0(var, '_rem_flag', sep=''))
+  trait.rem.flags[[names]] <- names
+}
+trait.rem.flags <- as.character(trait.rem.flags)
+for (var in trait.rem.flags) {
+  m.df[,var] <- 0
+}
+
+#g0 Removal
+m.df$g0_rem_flag <- ifelse(m.df$g0 > 126, 1, 0)
+
+# Add in any additional removals
+# m.df$shbg_rem_flag <- ifelse(m.df$shbg > 200 & m.df$shbg_assay_method != 1, 1, 0)
+# m.df$lh_rem_flag <- ifelse(m.df$lh > 50, 1, 0)
+# m.df$fsh_rem_flag <- ifelse(m.df$fsh > 40, 1, 0)
+
+
+for (var in traitnames) {
+  x <- paste0(var,"_rem_flag")
+  if(sum(m.df[,x]) > 0) message(paste(var, "has", sum(m.df[,x]), "records removed as outliers."))
+}
+
+m.df.removed <- filter(m.df, if_any(all_of(trait.rem.flags), ~ . == 1))
+removed.path <- 'J:/endocrinology/Dunaif_Team/Dunaif_Lab/__MultiEthnic FineMap R01 HD085227/Fine Map Replication-MEGA/Analysis/MEGA GWAS/Subtyping Analysis/Control_Clustering_Removed_Outliers.txt'
+#write.table(m.df.removed, removed.path, sep = '\t', row.names = F, quote = F)
+message(paste0('Outliers removed from dataset written to: ', removed.path))
+
+for (var in traitnames) {
+  x <- paste0(var,"_rem_flag")
+  m.df[,var] <- ifelse(m.df[,x] == 1, NA, m.df[,var])
+}
+
+## Only keep samples with complete, non-zero data for age and the 8 traits
+completeidx = complete.cases(m.df[, c(age, bmi, traitnames)])
+if(sum(!completeidx)>0) {
+    warning(paste("Removing", sum(!completeidx), "records records containing outliers"))
+    m.df <- m.df[completeidx, ]
+}
+
+message(paste("There are",nrow(m.df), "cases remaining in the dataset after outliers were removed."))
+
+
+```
+
+### Adjust BMI and 7 traits by Age, then apply reverse normal transformation
+```{r adjust_normalize, eval=TRUE, echo=FALSE, error=FALSE, message=TRUE}
+################################################
+# Adjust BMI and 7 other traits               #
+# Then apply reverse normal transformation      #
+################################################
+
+## Adjust log(BMI) for age, obtain the residual.
+m.df$bmi.z <- log(m.df$bmi)
+model <- lm(bmi.z ~ age, data=m.df)
+m.df$bmi.z <- resid(model)
+
+## For the other 7 traits, adjust log(trait) for age and assay method (if
+## there are more than one method), obtain the residual.
+for (var in traitnames) {
+  method <- paste0(var, assay)
+  z <- paste(var, 'z', sep=d)
+  m.df[,method] <- as.factor(as.character(m.df[,method]))
+  m.df[, z] <- log(m.df[, var])
+  if (nlevels(m.df[,method]) > 1) {
+    model <- lm(as.formula(paste(z, '~', age, '+', method)), data=m.df)
+  } else {
+    model <- lm(as.formula(paste(z, '~', age)), data=m.df)
+  }
+  m.df[, z] <-  resid(model)
+}
+
+## Apply the inverse normal transformation to the residuals
+for (col in cluster_cols[3:length(cluster_cols)]) {
+  #print(c(col,shapiro.test(m.df[,col])[[2]] ))
+  m.df[!is.na(m.df[,col]), col] <- rntransform(m.df[!is.na(m.df[,col]), col])
+}
+```
+
+
+```{r create_clust_df, eval=TRUE, echo=FALSE, error=FALSE, message=TRUE}
+# Display number of subjects being included after removals
+
+m.df2 <- m.df[, cluster_cols]
+names(m.df2) <- c(sample, age, var_labels)
+```
+***
+
+```{r correlation, eval=TRUE, echo=FALSE, error=FALSE, message=TRUE}
+corrplot(cor(m.df2[3:10]), method = 'number', type = 'lower')
+```
+
+### Hierarchical Clustering
+```{r perform_clustering, eval=TRUE, echo=FALSE, error=FALSE, message=TRUE}
+## Hierarchical clustering on the columns
+cluster_matrix <- as.matrix(na.omit(m.df2[, var_labels]))
+hc <- hclust(dist(cluster_matrix, method=dist_metric), method=clust_method)
+
+## Hierarchical clustering on the rows
+df.12 <- as.matrix(na.omit(m.df2[, var_labels]))
+row_hc <- hclust(dist(t(df.12), method=dist_metric), method=clust_method)
+
+## Define clusters (k=3 means we define 3 clusters)
+mycl <- cutree(hc, k=3)
+
+## Get clustering stats
+stats <- cluster.stats(dist(cluster_matrix, method=dist_metric), mycl)
+
+## Add the cluster ID# to your data and relabel the clusters
+clusters <- as.data.frame(cbind(cluster_matrix, cluster_id=mycl))
+
+```
+
+```{r relabel_clusters, eval=TRUE, echo=FALSE, error=FALSE, message=TRUE}
+clus.BMI.avg <- clusters %>%
+  group_by(cluster_id) %>%
+  summarise(BMI = mean(BMI))
+met <- which.max(clus.BMI.avg$BMI)
+clus.LH.avg <- clusters %>%
+  group_by(cluster_id) %>%
+  summarise(LH = mean(LH))
+rep <- which.max(clus.LH.avg$LH)
+clusters$cluster_new <- ifelse(clusters$cluster_id==met, 10,
+                               ifelse(clusters$cluster_id==rep, 11, 12))
+clusters$cluster_id <- ifelse(clusters$cluster_new==10, 1,
+                              ifelse(clusters$cluster_new==11, 2, 3))
+
+clusters$cluster_new = NULL  ## remove this temporary column
+clusters$group <- ifelse(clusters$cluster_id==1, "Metabolic",
+                         ifelse(clusters$cluster_id==2, "Reproductive", "Indeterminate"))
+
+
+## Apply updated cluster ID's an updated variable 'mycl_upd' that was generated from the 
+## cuttree function after pruning to 3 from the hierarchical clustering
+mycl_upd <- clusters$cluster_id
+```
+
+```{r clustering_stats, eval=TRUE, echo=FALSE, error=FALSE, message=TRUE}
+stats <- cluster.stats(dist(cluster_matrix, method=dist_metric), mycl_upd)
+
+```
+***
+
+***
+### HC Boxplots of Normalized Traits by Cluster
+```{r boxplots, eval=TRUE, echo=FALSE, error=FALSE, message=FALSE, warning=FALSE, out.width= "110%"}
+################################################
+# Boxplots of the traits by cluster            #
+################################################
+
+## Merge the sample_ids
+clusters <- merge(clusters, m.df2, by=var_labels)
+clusters.df <- clusters
+
+hc.melt <- melt(clusters[1:9], id.var = "cluster_id")
+
+sorted_vars <- var_labels
+plot_labels <- c('Ins0', 'BMI', 'Glu0', 'DHEAS', 'T', 'FSH', 'LH', 'SHBG')
+hc.melt$variable <- factor(hc.melt$variable, levels = c('Ins0', 'BMI', 'Glu0', 'DHEAS', 'T', 'FSH', 'LH', 'SHBG'))
+
+
+ggplot(data = hc.melt, aes(x=variable, y=value, fill=as.factor(cluster_id))) + geom_boxplot(outlier.shape = NA, coef = 0) +
+  scale_fill_manual(labels = c("Metabolic", "Reproductive", "Indeterminate"), values=c(rgb(0.81,0.3,0.25,.85), rgb(.33,.5,.77,1), 'grey'), name = "") + ylim(-2,2) + 
+  theme_bw() +
+  theme(legend.position = "bottom", legend.box = "horizontal", 
+        axis.title.x=element_blank()) + ylab("Z")
+
+```
+
+
+```{r updatelabel, eval=TRUE, echo=FALSE, error=FALSE, message=TRUE}
+## Re-order the data frame
+col_idx <- grep("cluster_id", names(clusters))
+clusters <- clusters[, c(col_idx, (1:ncol(clusters))[-col_idx])]
+col_idx <- grep(sample, names(clusters))
+clusters <- clusters[, c(col_idx, (1:ncol(clusters))[-col_idx])]
+
+
+## Write output table
+#write.csv(clusters, "path/to/HC_cluster_groups.csv")
+
+```
+
+***
+
+### PCA Plot of Cluster Results
+```{r pca_plots, eval=TRUE, echo=FALSE, error=FALSE, message=TRUE}
+
+################################################
+# PCA plots overlay the clusters               #
+################################################
+
+### PCA PLOT ###
+clusters$cluster_id <- as.factor(clusters$cluster_id)
+clusters$group <- ifelse(clusters$cluster_id==1, "Metabolic", ifelse(clusters$cluster_id==2, "Reproductive", "Indeterminate"))
+
+pca <- PCA(clusters[3:10], graph = F)
+
+# If plot is mirrored from example, multiply PC1 by -1 to reverse image to
+# maintain consistency.
+
+#pca$ind$coord[,1] <- pca$ind$coord[,1]*-1
+#pca$var$coord[,1] <- pca$var$coord[,1]*-1
+
+fviz_pca_biplot(pca, col.ind = clusters$group, palette = c('grey', rgb(0.81,0.3,0.25,.85), rgb(.33,.5,.77,1)),
+                addEllipses = TRUE, label = "var", col.var = "black", repel = TRUE,
+                legend.title = "Subtype", pointsize=2,#pointshape=19,
+                xlab = paste("PC1 (", round(pca$eig[1,2],2), '%)', sep=''),
+                ylab = paste("PC2 (", round(pca$eig[2,2],2), '%)', sep=''),
+                title = "")
+#dev.off()
+
+
+```
+
+***
+
+##Kmeans clustering
+
+```{r Kmeans, echo=FALSE, error=FALSE, message=FALSE, warning=FALSE}
+m.df_km <- m.df2[3:10]
+df <-scale(m.df_km)
+
+##kmeans cluster
+library(flexclust)
+library(dplyr)
+library(fpc)
+library(DT)
+
+set.seed(123)
+clk3 <- cclust(df, k=3, method = "kmeans", dist  = "manhattan")
+#barchart(clk3,legend=TRUE)
+
+m.df_km$cluster <- clk3@cluster
+m.df_km$cluster<-as.character(m.df_km$cluster)
+
+##Label clusters by name
+clus.BMI.avg <- m.df_km %>%
+  group_by(cluster) %>%
+  summarise(BMI = mean(BMI))
+met_km <- which.max(clus.BMI.avg$BMI)
+clus.LH.avg <- m.df_km %>%
+  group_by(cluster) %>%
+  summarise(LH = mean(LH))
+rep_km <- which.max(clus.LH.avg$LH)
+
+
+m.df_km$cluster_new <- ifelse(m.df_km$cluster==met_km, 10,
+                               ifelse(m.df_km$cluster==rep_km, 11, 12))
+m.df_km$cluster_id <- ifelse(m.df_km$cluster_new==10, 1,
+                              ifelse(m.df_km$cluster_new==11, 2, 3))
+
+m.df_km$cluster_new = NULL  ## remove this temporary column
+m.df_km$cluster = NULL ##remove original cluster number
+
+m.df_km$group <- ifelse(m.df_km$cluster_id==1, "Metabolic",
+                         ifelse(m.df_km$cluster_id==2, "Reproductive", "Indeterminate"))
+
+#Merge named clusters with subject IDs 
+clusters_km <- merge(m.df_km, m.df2, by=var_labels)
+
+#write.csv(clusters_km,"J:/endocrinology/Dunaif_Team/Dunaif_Lab/Subtyping/Clustering/GitHub/Kmeans_cluster_groups.csv")
+
+
+###visualize plot by PCA
+res.pca <- PCA(df, graph = FALSE)
+
+#str(res.pca)
+
+#res.pca$ind$coord[,1] <- res.pca$ind$coord[,1]*-1
+#res.pca$var$coord[,1] <- res.pca$var$coord[,1]*-1
+
+cluster_colors_km <- c('grey', "#CF4D40D9", "#5480C4FF") 
+
+fviz_pca_biplot(
+res.pca,
+axes = c(1, 2),
+geom.ind = "point",
+geom.var = c("arrow", "text"),
+col.ind = m.df_km$group,
+fill.ind = "white",
+col.var = "black",
+fill.var = "white",
+gradient.cols = NULL,
+label = "all",
+invisible = "none",
+repel = FALSE,
+habillage = "none",
+palette = cluster_colors_km,
+addEllipses = TRUE,
+title = "PCA - Biplot")
+```
+
+***
+### Kmeans Boxplots of Normalized Traits by Cluster
+```{r boxplots, eval=TRUE, echo=FALSE, error=FALSE, message=FALSE, warning=FALSE, out.width= "110%"}
+################################################
+# Boxplots of the traits by cluster            #
+################################################
+
+## Merge the sample_ids
+hc.melt_km <- melt(clusters_km[1:9], id.var = "cluster_id")
+
+#sorted_vars <- var_labels
+plot_labels <- c('Ins0', 'BMI', 'Glu0', 'DHEAS', 'T', 'FSH', 'LH', 'SHBG')
+hc.melt_km$variable <- factor(hc.melt_km$variable, levels = c('Ins0', 'BMI', 'Glu0', 'DHEAS', 'T', 'FSH', 'LH', 'SHBG'))
+
+
+ggplot(data = hc.melt_km, aes(x=variable, y=value, fill=as.factor(cluster_id))) + 
+  geom_boxplot(outlier.shape = NA, coef = 0) +
+  scale_fill_manual(labels = c("Metabolic", "Reproductive", "Indeterminate"), values=c(rgb(0.81,0.3,0.25,.85), rgb(.33,.5,.77,1), 'grey'), name = "") + ylim(-2,2) + 
+  theme_bw() +
+  theme(legend.position = "bottom", legend.box = "horizontal", 
+        axis.title.x=element_blank()) + ylab("Z")
+
+```
+
+## Gaussian Mixed Models clustering
+
+```{r Gaussian, echo=FALSE, error=FALSE, message=FALSE, warning=FALSE}
+##gaussian mixed models cluster
+library(ClusterR)
+
+m.df_gmm <- m.df2[3:10]
+data_gmm <-center_scale(m.df_gmm, mean_center = T, sd_scale = T) #center and scale data
+
+gmm <- GMM(data_gmm, 3, dist_mode = "maha_dist", seed_mode = "random_subset", km_iter =10, em_iter = 10, verbose =F)
+
+pr= predict_GMM(data_gmm, gmm$centroids, gmm$covariance_matrices, gmm$weights)
+
+m.df_gmm$cluster <- pr$cluster_labels
+m.df_gmm$cluster<-as.character(m.df_gmm$cluster)
+
+##Label clusters by name
+clus.BMI.avg <- m.df_gmm %>%
+  group_by(cluster) %>%
+  summarise(BMI = mean(BMI))
+met_gmm <- which.max(clus.BMI.avg$BMI)
+clus.LH.avg <- m.df_gmm %>%
+  group_by(cluster) %>%
+  summarise(LH = mean(LH))
+rep_gmm <- which.max(clus.LH.avg$LH)
+
+
+m.df_gmm$cluster_new <- ifelse(m.df_gmm$cluster==met_gmm, 10,
+                               ifelse(m.df_gmm$cluster==rep_gmm, 11, 12))
+m.df_gmm$cluster_id <- ifelse(m.df_gmm$cluster_new==10, 1,
+                              ifelse(m.df_gmm$cluster_new==11, 2, 3))
+
+m.df_gmm$cluster_new = NULL  ## remove this temporary column
+m.df_gmm$cluster = NULL ##remove original cluster number
+
+m.df_gmm$group <- ifelse(m.df_gmm$cluster_id==1, "Metabolic",
+                         ifelse(m.df_gmm$cluster_id==2, "Reproductive", "Indeterminate"))
+
+#Merge named clusters with subject IDs 
+clusters_gmm <- merge(m.df_gmm, m.df2, by=var_labels)
+
+#write.csv(clusters_gmm,"path/to/GMM_cluster_groups.csv")
+
+cluster_colors_gmm <- c('grey', "#CF4D40D9", "#5480C4FF") 
+
+fviz_pca_biplot(
+res.pca,
+axes = c(1, 2),
+geom.ind = "point",
+geom.var = c("arrow", "text"),
+col.ind = m.df_gmm$group,
+fill.ind = "white",
+col.var = "black",
+fill.var = "white",
+gradient.cols = NULL,
+label = "all",
+invisible = "none",
+repel = FALSE,
+habillage = "none",
+palette = cluster_colors_gmm,
+addEllipses = TRUE,
+title = "PCA - Biplot")
+```
+
+***
+### Gaussain Boxplots of Normalized Traits by Cluster
+
+```{r boxplots, eval=TRUE, echo=FALSE, error=FALSE, message=FALSE, warning=FALSE, out.width= "110%"}
+################################################
+# Boxplots of the traits by cluster            #
+################################################
+
+## Merge the sample_ids
+hc.melt_gmm <- melt(clusters_km[1:9], id.var = "cluster_id")
+
+#sorted_vars <- var_labels
+plot_labels <- c('Ins0', 'BMI', 'Glu0', 'DHEAS', 'T', 'FSH', 'LH', 'SHBG')
+hc.melt_gmm$variable <- factor(hc.melt_gmm$variable, levels = c('Ins0', 'BMI', 'Glu0', 'DHEAS', 'T', 'FSH', 'LH', 'SHBG'))
+
+
+ggplot(data = hc.melt_gmm, aes(x=variable, y=value, fill=as.factor(cluster_id))) + 
+  geom_boxplot(outlier.shape = NA, coef = 0) +
+  scale_fill_manual(labels = c("Metabolic", "Reproductive", "Indeterminate"), values=c(rgb(0.81,0.3,0.25,.85), rgb(.33,.5,.77,1), 'grey'), name = "") + ylim(-2,2) + 
+  theme_bw() +
+  theme(legend.position = "bottom", legend.box = "horizontal", 
+        axis.title.x=element_blank()) + ylab("Z")
+
+```
+
+## Compare 3 method of clustering
+
+```{r compare cluster groups, echo=FALSE}
+
+clusters_compare =  merge(clusters[2:10], clusters_km[1:9], by=var_labels) %>% 
+  merge(clusters_gmm, by= var_labels)  %>% rename(clusters_hc = cluster_id.x, 
+                                                  clusters_km = cluster_id.y, 
+                                                  clusters_gmm = cluster_id)
+clusters_compare$group = NULL
+
+consensus = function(x, len=3) {
+    temp = sort(table(x), decreasing=T)
+    ifelse(temp[1]>len/2, names(temp)[1], NA)
+}
+
+clusters_consensus= cbind(clusters_compare, consensus=apply(clusters_compare[9:11], 1, consensus))
+
+```
+
+# Cross Tables- Consensus Result vs each method
+
+```{r Consensus Crosstables, echo=FALSE, out.width="50%"}
+
+clusters_consensus$clusters_hc <- ifelse(clusters_consensus$clusters_hc==1, "1-Met",
+                                         ifelse(clusters_consensus$clusters_hc==2, "2-Rep", 
+                                                ifelse(clusters_consensus$clusters_hc==3, "3-Ind", "NA")))
+clusters_consensus$clusters_km <- ifelse(clusters_consensus$clusters_km==1, "1-Met",
+                                         ifelse(clusters_consensus$clusters_km==2, "2-Rep", 
+                                                ifelse(clusters_consensus$clusters_km==3, "3-Ind", "NA")))
+clusters_consensus$clusters_gmm <- ifelse(clusters_consensus$clusters_gmm==1, "1-Met",
+                                          ifelse(clusters_consensus$clusters_gmm==2, "2-Rep",
+                                                 ifelse(clusters_consensus$clusters_gmm==3, "3-Ind", "NA")))
+clusters_consensus$consensus <- ifelse(clusters_consensus$consensus==1, "1-Met",
+                                       ifelse(clusters_consensus$consensus==2, "2-Rep",
+                                              ifelse(clusters_consensus$consensus==3, "3-Ind", "NA")))
+
+CrossTable(clusters_consensus$consensus, clusters_consensus$clusters_hc, digits=2, prop.r = TRUE, prop.c =TRUE,
+           prop.t= FALSE, prop.chisq = FALSE, chisq =FALSE, fisher =FALSE, missing.include=FALSE)
+
+CrossTable(clusters_consensus$consensus, clusters_consensus$clusters_km, digits=2, prop.r = TRUE, prop.c =TRUE,
+           prop.t= FALSE, prop.chisq = FALSE, chisq =FALSE, fisher =FALSE, missing.include=FALSE)
+
+CrossTable(clusters_consensus$consensus, clusters_consensus$clusters_gmm, digits=2, prop.r = TRUE, prop.c =TRUE,
+           prop.t= FALSE, prop.chisq = FALSE, chisq =FALSE, fisher =FALSE, missing.include=FALSE)
+
+cluster_colors = c('#CF4D40D9','#5480C4FF','grey')
+```
+## Visualize agreement of each method vs determined Consensus
+
+```{r compare plots, out.width="50%"}
+ggplot(clusters_consensus, aes(fill = clusters_hc, x=consensus)) +
+  geom_bar() +
+  scale_fill_manual(values = cluster_colors) +
+   ggtitle("Consensus vs HC Clustering")
+
+ggplot(clusters_consensus, aes(fill = clusters_km, x=consensus)) +
+  geom_bar() +
+  scale_fill_manual(values = cluster_colors) +
+   ggtitle("Consensus vs Kmeans Clustering")
+
+ggplot(clusters_consensus, aes(fill = clusters_gmm, x=consensus)) +
+  geom_bar() +
+  scale_fill_manual(values = cluster_colors) +
+  ggtitle("Consensus vs GMM Clustering")
+
+```
+
+## Plot Traits of Consensus subjects and NA (non-Consensus)
+
+```{r boxplots}
+
+con = clusters_consensus[c(1:8, 14)]
+
+con.melt <- melt(con, id.var = "consensus")
+
+#sorted_vars <- var_labels
+#plot_labels <- c('Ins0', 'BMI', 'Glu0', 'DHEAS', 'T', 'FSH', 'LH', 'SHBG')
+con.melt$variable <- factor(con.melt$variable, levels = c('Ins0', 'BMI', 'Glu0', 'DHEAS', 'T', 'FSH', 'LH', 'SHBG'))
+
+
+ggplot(data = con.melt, aes(x=variable, y=value, fill=as.factor(consensus))) + geom_boxplot(outlier.shape = NA, coef = 0) +
+  scale_fill_manual(labels = c("Metabolic", "Reproductive", "Indeterminate"), values=c(rgb(0.81,0.3,0.25,.85), rgb(.33,.5,.77,1), 'grey'), name = "") + ylim(-3.4,3.4) + 
+  theme_bw() +
+  theme(legend.position = "bottom", legend.box = "horizontal", 
+        axis.title.x=element_blank()) + ylab("Z") +
+  ggtitle("Traits from Clustering Consensus")
+```
+
+## Visualize Traits of HC subjects that did form a consensus (Match) vs subjects that did not form a consensus (Non-Match)
+
+```{r non-consensus HC}
+HC_nonCon = clusters_consensus %>% mutate(
+  hc_non= ifelse(clusters_hc=="1-Met" & consensus!="1-Met", 1,
+                 ifelse(clusters_hc=="2-Rep" & consensus!="2-Rep", 1,
+                        ifelse(clusters_hc=="3-Ind" & consensus!="3-Ind", 1, 0)))
+)
+
+HC_nonCon = HC_nonCon[c(12,9,14,15)]
+
+HC_nonCon =  merge(HC_nonCon, m.df[c(1,3,4,6,8,10,12,14,16)], by="sample_id")
+
+HC_nonCon = rename(HC_nonCon, BMI=bmi, Glu0=g0, Ins0=i0, DHEAS=dheas, SHBG=shbg, LH=lh, FSH=fsh)
+HC_nonCon$hc_non = ifelse(HC_nonCon$hc_non ==1, "Non-match", 
+                          ifelse(HC_nonCon$hc_non ==0, "Match", NA))
+```
+
+```{r plot non-hc_consensus, echo=FALSE}
+col= c('#CF4D40D9', '#5480C4FF', 'grey', '#CF4D40D9', '#5480C4FF', 'grey')
+
+ggplot(data = subset(HC_nonCon, !is.na(hc_non)), aes(y = BMI, x = clusters_hc, fill = clusters_hc)) + 
+  geom_boxplot(fill=col) +
+  ggtitle("HC and Consensus match vs non-match") +
+  facet_wrap("hc_non") +
+  xlab("") 
+
+ggplot(data = subset(HC_nonCon, !is.na(hc_non)), aes(y = T, x = clusters_hc, fill = clusters_hc)) + 
+  geom_boxplot(fill=col) +
+  ggtitle("HC and Consensus match vs non-match") +
+  facet_wrap("hc_non") +
+  xlab("") 
+
+ggplot(data = subset(HC_nonCon, !is.na(hc_non)), aes(y = Ins0, x = clusters_hc, fill = clusters_hc)) + 
+  geom_boxplot(fill=col) +
+  ggtitle("HC and Consensus match vs non-match") +
+  facet_wrap("hc_non") +
+  ylim(0,130) +
+  xlab("") 
+
+ggplot(data = subset(HC_nonCon, !is.na(hc_non)), aes(y = Glu0, x = clusters_hc, fill = clusters_hc)) + 
+  geom_boxplot(fill=col) +
+  ggtitle("HC and Consensus match vs non-match") +
+  facet_wrap("hc_non") +
+  xlab("") 
+
+ggplot(data = subset(HC_nonCon, !is.na(hc_non)), aes(y = DHEAS, x = clusters_hc, fill = clusters_hc)) + 
+  geom_boxplot(fill=col) +
+  ggtitle("HC and Consensus match vs non-match") +
+  facet_wrap("hc_non") +
+  xlab("") 
+
+ggplot(data = subset(HC_nonCon, !is.na(hc_non)), aes(y = SHBG, x = clusters_hc, fill = clusters_hc)) + 
+  geom_boxplot(fill=col) +
+  ggtitle("HC and Consensus match vs non-match") +
+  facet_wrap("hc_non") +
+  xlab("") 
+
+ggplot(data = subset(HC_nonCon, !is.na(hc_non)), aes(y = LH, x = clusters_hc, fill = clusters_hc)) + 
+  geom_boxplot(fill=col) +
+  ggtitle("HC and Consensus match vs non-match") +
+  facet_wrap("hc_non") +
+  xlab("") 
+
+ggplot(data = subset(HC_nonCon, !is.na(hc_non)), aes(y = FSH, x = clusters_hc, fill = clusters_hc)) + 
+  geom_boxplot(fill=col) +
+  ggtitle("HC and Consensus match vs non-match") +
+  facet_wrap("hc_non") +
+  xlab("") 
+```
+
