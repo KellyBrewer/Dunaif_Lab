@@ -53,62 +53,13 @@ rntransform <- function(y) {
   qnorm((out - 0.5) / max(out, na.rm=T))
 }
 
-## Descriptive Stat Tables
-trait.desc.stats <- function(var, assaymethod) {
-  var.name <- substitute(var)
-  assay.name <- substitute(assaymethod)
-  datatable(proc_means(m.df, vars = as.character(var.name), by = as.character(assay.name), n=TRUE, nmiss = TRUE, mean=TRUE,
-                     sd = TRUE, min = TRUE, max = TRUE, median = TRUE,
-                     q1 = TRUE, q3 = TRUE), rownames = FALSE, 
-          options = list(dom = 't',columnDefs = list(list(className = 'dt-center', 
-                                                          targets = "_all"))))
-}
-
-#Histograms of Traits by Assay Method
-trait.plot.hist <- function(df, var, assaymethod) {
-  arg <- match.call()
-  assay.name <- substitute(assaymethod)
-  count.vec <- df[[assay.name]]
-  count <- length(unique(count.vec))
-
-  ggplot(data = subset(df, !is.na(eval(arg$var))), 
-         aes(x = eval(arg$var), group = eval(arg$assaymethod), 
-             fill = as.factor(eval(arg$assaymethod)))) + 
-    geom_histogram(bins = 30, aes(y=..density..), colour="black", fill="white") + 
-    geom_density(alpha = 0.7) + 
-    facet_wrap(~eval(arg$assaymethod), nrow = count) + xlab(substitute(var)) +
-    guides(fill=guide_legend(title="Assay Method"))
-} 
-
-#Boxplots of Traits by Assay Method
-trait.plot.box <- function(df, var, assaymethod) {  
-  arg <- match.call()
-  assay.name <- substitute(assaymethod)
-  ggplot(data = subset(df, !is.na(eval(arg$var))), 
-              aes(x = as.factor(eval(arg$assaymethod)), y = eval(arg$var), 
-                  fill = as.factor(eval(arg$assaymethod)))) + 
-    geom_boxplot(position=position_dodge(1)) + xlab("Assay Method") +
-    ylab(substitute(var)) + guides(fill=guide_legend(title="Assay Method"))
-}
-
-trait.violin.stats <- function(df, var) { 
-  var <- enquo(var)
-  ggbetweenstats(data = df, x = cluster_id, y = !!var,
-  title = "Distribution  Across Clusters", type = "p",
-  pairwise.comparisons = TRUE, # display significant pairwise comparisons
-  pairwise.annotation = "p.value", # how do you want to annotate the pairwise comparisons
-  p.adjust.method = "bonferroni" # method for adjusting p-values for multiple comparisons
-  ) + 
-    ggplot2::scale_color_manual(values = c(rgb(0.81,0.3,0.25,.85), rgb(.33,.5,.77,1), 'grey')) +
-    scale_x_discrete(labels= c('Metabolic', 'Reproductive', "Indeterminate"))
-}
 ################################################
 # Variables                                    #
 ################################################
 
 ## Path/file of the input file, which must have columns according to
 ## cluster_input_cols below.
-input_file <- "J:/endocrinology/Dunaif_Team/Dunaif_Lab/Subtyping/Clustering/GitHub/SampleData_355.txt"
+input_file <- "path/to/SampleData_355.txt"
 
 ## Names of sample ID, age, bmi, and the other 7 traits
 sample <- 'sample_id'; age <- 'age'; bmi <- 'bmi'
@@ -388,7 +339,7 @@ fviz_pca_biplot(pca, col.ind = clusters$group, palette = c('grey', rgb(0.81,0.3,
 
 ***
 
-##Kmeans clustering
+## Kmeans clustering
 
 ```{r Kmeans, echo=FALSE, error=FALSE, message=FALSE, warning=FALSE}
 m.df_km <- m.df2[3:10]
@@ -432,7 +383,7 @@ m.df_km$group <- ifelse(m.df_km$cluster_id==1, "Metabolic",
 #Merge named clusters with subject IDs 
 clusters_km <- merge(m.df_km, m.df2, by=var_labels)
 
-#write.csv(clusters_km,"J:/endocrinology/Dunaif_Team/Dunaif_Lab/Subtyping/Clustering/GitHub/Kmeans_cluster_groups.csv")
+#write.csv(clusters_km,"path/to/Kmeans_cluster_groups.csv")
 
 
 ###visualize plot by PCA
@@ -466,7 +417,7 @@ title = "PCA - Biplot")
 
 ***
 ### Kmeans Boxplots of Normalized Traits by Cluster
-```{r boxplots, eval=TRUE, echo=FALSE, error=FALSE, message=FALSE, warning=FALSE, out.width= "110%"}
+```{r boxplots_km, eval=TRUE, echo=FALSE, error=FALSE, message=FALSE, warning=FALSE, out.width= "110%"}
 ################################################
 # Boxplots of the traits by cluster            #
 ################################################
@@ -555,7 +506,7 @@ title = "PCA - Biplot")
 ***
 ### Gaussain Boxplots of Normalized Traits by Cluster
 
-```{r boxplots, eval=TRUE, echo=FALSE, error=FALSE, message=FALSE, warning=FALSE, out.width= "110%"}
+```{r boxplots_gmm, eval=TRUE, echo=FALSE, error=FALSE, message=FALSE, warning=FALSE, out.width= "110%"}
 ################################################
 # Boxplots of the traits by cluster            #
 ################################################
@@ -613,13 +564,13 @@ clusters_consensus$consensus <- ifelse(clusters_consensus$consensus==1, "1-Met",
                                        ifelse(clusters_consensus$consensus==2, "2-Rep",
                                               ifelse(clusters_consensus$consensus==3, "3-Ind", "NA")))
 
-CrossTable(clusters_consensus$consensus, clusters_consensus$clusters_hc, digits=2, prop.r = TRUE, prop.c =TRUE,
+gmodels::CrossTable(clusters_consensus$consensus, clusters_consensus$clusters_hc, digits=2, prop.r = TRUE, prop.c =TRUE,
            prop.t= FALSE, prop.chisq = FALSE, chisq =FALSE, fisher =FALSE, missing.include=FALSE)
 
-CrossTable(clusters_consensus$consensus, clusters_consensus$clusters_km, digits=2, prop.r = TRUE, prop.c =TRUE,
+gmodels::CrossTable(clusters_consensus$consensus, clusters_consensus$clusters_km, digits=2, prop.r = TRUE, prop.c =TRUE,
            prop.t= FALSE, prop.chisq = FALSE, chisq =FALSE, fisher =FALSE, missing.include=FALSE)
 
-CrossTable(clusters_consensus$consensus, clusters_consensus$clusters_gmm, digits=2, prop.r = TRUE, prop.c =TRUE,
+gmodels::CrossTable(clusters_consensus$consensus, clusters_consensus$clusters_gmm, digits=2, prop.r = TRUE, prop.c =TRUE,
            prop.t= FALSE, prop.chisq = FALSE, chisq =FALSE, fisher =FALSE, missing.include=FALSE)
 
 cluster_colors = c('#CF4D40D9','#5480C4FF','grey')
@@ -646,7 +597,7 @@ ggplot(clusters_consensus, aes(fill = clusters_gmm, x=consensus)) +
 
 ## Plot Traits of Consensus subjects and NA (non-Consensus)
 
-```{r boxplots}
+```{r boxplots consensus, echo=FALSE}
 
 con = clusters_consensus[c(1:8, 14)]
 
@@ -667,7 +618,7 @@ ggplot(data = con.melt, aes(x=variable, y=value, fill=as.factor(consensus))) + g
 
 ## Visualize Traits of HC subjects that did form a consensus (Match) vs subjects that did not form a consensus (Non-Match)
 
-```{r non-consensus HC}
+```{r non-consensus HC, echo=FALSE}
 HC_nonCon = clusters_consensus %>% mutate(
   hc_non= ifelse(clusters_hc=="1-Met" & consensus!="1-Met", 1,
                  ifelse(clusters_hc=="2-Rep" & consensus!="2-Rep", 1,
@@ -734,5 +685,62 @@ ggplot(data = subset(HC_nonCon, !is.na(hc_non)), aes(y = FSH, x = clusters_hc, f
   ggtitle("HC and Consensus match vs non-match") +
   facet_wrap("hc_non") +
   xlab("") 
+```
+
+```{r strong consensus, echo=FALSE}
+str_consensus= clusters_consensus %>% mutate(str_consensus=
+  ifelse(clusters_hc=="1-Met" & clusters_km=="1-Met" & clusters_gmm=="1-Met", "1-Met",
+         ifelse(clusters_hc=="2-Rep" & clusters_km=="2-Rep" & clusters_gmm=="2-Rep", "2-Rep",
+                ifelse(clusters_hc=="3-Ind" & clusters_km=="3-Ind" & clusters_gmm=="3-Ind", "3-Ind", NA))))
+
+```
+
+```{r str_consensus Crosstables, echo=FALSE, out.width="50%"}
+
+gmodels::CrossTable(str_consensus$str_consensus, str_consensus$clusters_hc, digits=2, prop.r = TRUE, prop.c =TRUE,
+           prop.t= FALSE, prop.chisq = FALSE, chisq =FALSE, fisher =FALSE, missing.include=FALSE)
+
+gmodels::CrossTable(str_consensus$str_consensus, str_consensus$clusters_km, digits=2, prop.r = TRUE, prop.c =TRUE,
+           prop.t= FALSE, prop.chisq = FALSE, chisq =FALSE, fisher =FALSE, missing.include=FALSE)
+
+gmodels::CrossTable(str_consensus$str_consensus, str_consensus$clusters_gmm, digits=2, prop.r = TRUE, prop.c =TRUE,
+           prop.t= FALSE, prop.chisq = FALSE, chisq =FALSE, fisher =FALSE, missing.include=FALSE)
+```
+
+```{r compare plots str, out.width="50%"}
+ggplot(str_consensus, aes(fill = clusters_hc, x=str_consensus)) +
+  geom_bar() +
+  scale_fill_manual(values = cluster_colors) +
+   ggtitle("Strong Consensus vs HC Clustering")
+
+ggplot(str_consensus, aes(fill = clusters_km, x=str_consensus)) +
+  geom_bar() +
+  scale_fill_manual(values = cluster_colors) +
+   ggtitle("Strong Consensus vs Kmeans Clustering")
+
+ggplot(str_consensus, aes(fill = clusters_gmm, x=str_consensus)) +
+  geom_bar() +
+  scale_fill_manual(values = cluster_colors) +
+  ggtitle("Strong Consensus vs GMM Clustering")
+
+```
+
+```{r boxplot strong consensus, echo=FALSE}
+
+str_con = str_consensus[c(1:8, 15)]
+
+str_con.melt <- melt(str_con, id.var = "str_consensus")
+
+str_con.melt$variable <- factor(str_con.melt$variable, levels = c('Ins0', 'BMI', 'Glu0', 'DHEAS', 'T', 'FSH', 'LH', 'SHBG'))
+
+
+ggplot(data = str_con.melt, aes(x=variable, y=value, fill=as.factor(str_consensus))) + geom_boxplot(outlier.shape = NA, coef = 0) +
+  scale_fill_manual(labels = c("Metabolic", "Reproductive", "Indeterminate"), values=c(rgb(0.81,0.3,0.25,.85), rgb(.33,.5,.77,1), 'grey'), name = "") + ylim(-3.4,3.4) + 
+  theme_bw() +
+  theme(legend.position = "bottom", legend.box = "horizontal", 
+        axis.title.x=element_blank()) + ylab("Z") +
+  ggtitle("Traits from Strong Consensus")
+
+write.csv(str_consensus, "path/to/Consensus_clusters.csv")
 ```
 
