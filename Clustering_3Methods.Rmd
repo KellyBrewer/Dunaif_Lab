@@ -236,14 +236,14 @@ clusters <- as.data.frame(cbind(cluster_matrix, cluster_id=mycl))
 ```
 
 ```{r relabel_clusters, eval=TRUE, echo=FALSE, error=FALSE, message=TRUE}
-clus.BMI.avg <- clusters %>%
+centroids <- clusters %>% 
   group_by(cluster_id) %>%
-  summarise(BMI = mean(BMI))
-met <- which.max(clus.BMI.avg$BMI)
-clus.LH.avg <- clusters %>%
-  group_by(cluster_id) %>%
-  summarise(LH = mean(LH))
-rep <- which.max(clus.LH.avg$LH)
+  summarise_all(funs(mean))
+centroids.met <- centroids[,c('BMI', 'Ins0', 'Glu0')]
+centroids.rep <- centroids[,c('SHBG', 'LH', 'FSH')]
+met <- which.max(rowSums(centroids.met))
+rep <- which.max(rowSums(centroids.rep))
+
 clusters$cluster_new <- ifelse(clusters$cluster_id==met, 10,
                                ifelse(clusters$cluster_id==rep, 11, 12))
 clusters$cluster_id <- ifelse(clusters$cluster_new==10, 1,
@@ -359,14 +359,13 @@ m.df_km$cluster <- clk3@cluster
 m.df_km$cluster<-as.character(m.df_km$cluster)
 
 ##Label clusters by name
-clus.BMI.avg <- m.df_km %>%
+centroids_km <- m.df_km %>% 
   group_by(cluster) %>%
-  summarise(BMI = mean(BMI))
-met_km <- which.max(clus.BMI.avg$BMI)
-clus.LH.avg <- m.df_km %>%
-  group_by(cluster) %>%
-  summarise(LH = mean(LH))
-rep_km <- which.max(clus.LH.avg$LH)
+  summarise_all(funs(mean))
+centroids.met_km <- centroids_km[,c('BMI', 'Ins0', 'Glu0')]
+centroids.rep_km <- centroids_km[,c('SHBG', 'LH', 'FSH')]
+met_km <- which.max(rowSums(centroids.met_km))
+rep_km <- which.max(rowSums(centroids.rep_km))
 
 
 m.df_km$cluster_new <- ifelse(m.df_km$cluster==met_km, 10,
@@ -456,14 +455,13 @@ m.df_gmm$cluster <- pr$cluster_labels
 m.df_gmm$cluster<-as.character(m.df_gmm$cluster)
 
 ##Label clusters by name
-clus.BMI.avg <- m.df_gmm %>%
+centroids_gmm <- m.df_gmm %>% 
   group_by(cluster) %>%
-  summarise(BMI = mean(BMI))
-met_gmm <- which.max(clus.BMI.avg$BMI)
-clus.LH.avg <- m.df_gmm %>%
-  group_by(cluster) %>%
-  summarise(LH = mean(LH))
-rep_gmm <- which.max(clus.LH.avg$LH)
+  summarise_all(funs(mean))
+centroids.met_gmm <- centroids_gmm[,c('BMI', 'Ins0', 'Glu0')]
+centroids.rep_gmm <- centroids_gmm[,c('SHBG', 'LH', 'FSH')]
+met_gmm <- which.max(rowSums(centroids.met_gmm))
+rep_gmm <- which.max(rowSums(centroids.rep_gmm))
 
 
 m.df_gmm$cluster_new <- ifelse(m.df_gmm$cluster==met_gmm, 10,
