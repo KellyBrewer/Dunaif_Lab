@@ -512,14 +512,14 @@ clusters <- as.data.frame(cbind(cluster_matrix, cluster_id=mycl))
 ##~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 ##            Find Means of Most Extreme Variables to ReLabel Groups        ----
 ##~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-clus.BMI.avg <- clusters %>%
+centroids <- clusters %>% 
   group_by(cluster_id) %>%
-  summarise(BMI = mean(BMI))
-met <- which.max(clus.BMI.avg$BMI)
-clus.LH.avg <- clusters %>%
-  group_by(cluster_id) %>%
-  summarise(LH = mean(LH))
-rep <- which.max(clus.LH.avg$LH)
+  summarise_all(funs(mean))
+centroids.met <- centroids[,c('BMI', 'Ins0', 'Glu0')]
+centroids.rep <- centroids[,c('SHBG', 'LH', 'FSH')]
+met <- which.max(rowSums(centroids.met))
+rep <- which.max(rowSums(centroids.rep))
+
 clusters$cluster_new <- ifelse(clusters$cluster_id==met, 10,
                                ifelse(clusters$cluster_id==rep, 11, 12))
 clusters$cluster_id <- ifelse(clusters$cluster_new==10, 1,
@@ -1117,14 +1117,14 @@ clusters <- as.data.frame(cbind(cluster_matrix, cluster_id=mycl))
 ```
 
 ```{r relabel_clusters_8, eval=TRUE, echo=FALSE, error=FALSE, message=TRUE}
-clus.BMI.avg <- clusters %>%
+centroids <- clusters %>% 
   group_by(cluster_id) %>%
-  summarise(BMI = mean(BMI))
-met <- which.max(clus.BMI.avg$BMI)
-clus.LH.avg <- clusters %>%
-  group_by(cluster_id) %>%
-  summarise(LH = mean(LH))
-rep <- which.max(clus.LH.avg$LH)
+  summarise_all(funs(mean))
+centroids.met <- centroids[,c('BMI', 'Ins0', 'Glu0')]
+centroids.rep <- centroids[,c('SHBG', 'LH', 'FSH')]
+met <- which.max(rowSums(centroids.met))
+rep <- which.max(rowSums(centroids.rep))
+
 clusters$cluster_new <- ifelse(clusters$cluster_id==met, 10,
                                ifelse(clusters$cluster_id==rep, 11, 12))
 clusters$cluster_id <- ifelse(clusters$cluster_new==10, 1,
