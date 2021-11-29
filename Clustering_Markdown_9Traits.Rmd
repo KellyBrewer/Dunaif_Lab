@@ -688,26 +688,26 @@ clusters <- clusters[, c(col_idx, (1:ncol(clusters))[-col_idx])]
 ##                       Radar Plot of Traits by Cluster                    ----
 ##~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-# radar.df <- clusters %>%
-#   group_by(group) %>%
-#   summarise(across(BMI:FSH, mean))
-# 
-# radar_order <- c('group', 'Ins0', 'BMI', 'Glu0', 'DHEAS', 'T', 'LH', 'FSH', 'SHBG')
-# radar.df <- radar.df[, radar_order]
-# 
-# ggradar(
-#    radar.df, 
-#    font.radar = "sans",
-#    values.radar = c("-1.5", "0", "1.5"),
-#    grid.min = -1.5, grid.mid = 0, grid.max = 1.5,
-#    # Polygons
-#    group.line.width = 1, 
-#    group.point.size = 1,
-#    group.colours = c('grey', rgb(0.81,0.3,0.25,.85), rgb(.33,.5,.77,1)),
-#    background.circle.colour = "white",
-#    gridline.mid.colour = "black",
-#    legend.position = "bottom"
-#  )
+ radar.df <- clusters %>%
+   group_by(group) %>%
+   summarise(across(BMI:FSH, mean))
+ 
+ radar_order <- c('group', 'Ins0', 'BMI', 'Glu0', 'DHEAS', 'T', 'LH', 'FSH', 'SHBG')
+ radar.df <- radar.df[, radar_order]
+ 
+ ggradar(
+    radar.df, 
+    font.radar = "sans",
+    values.radar = c("-1.5", "0", "1.5"),
+    grid.min = -1.5, grid.mid = 0, grid.max = 1.5,
+    # Polygons
+    group.line.width = 1, 
+    group.point.size = 1,
+    group.colours = c('grey', rgb(0.81,0.3,0.25,.85), rgb(.33,.5,.77,1)),
+    background.circle.colour = "white",
+    gridline.mid.colour = "black",
+    legend.position = "bottom"
+  )
 ```
 
 
@@ -1261,26 +1261,26 @@ clusters <- clusters[, c(col_idx, (1:ncol(clusters))[-col_idx])]
 ***
 ### Radar Plot of Normalized Traits by Cluster
 ```{r radarplot_8, eval=TRUE, echo=FALSE, error=FALSE, message=TRUE}
-# radar.df <- clusters %>%
-#   group_by(group) %>%
-#   summarise(across(BMI:FSH, mean))
-# 
-# radar_order <- c('group', 'Ins0', 'BMI', 'Glu0', 'DHEAS', 'T', 'LH', 'FSH', 'SHBG')
-# radar.df <- radar.df[, radar_order]
-# 
-# ggradar(
-#    radar.df, 
-#    font.radar = "sans",
-#    values.radar = c("-1.5", "0", "1.5"),
-#    grid.min = -1.5, grid.mid = 0, grid.max = 1.5,
-#    # Polygons
-#    group.line.width = 1, 
-#    group.point.size = 1,
-#    group.colours = c('grey', rgb(0.81,0.3,0.25,.85), rgb(.33,.5,.77,1)),
-#    background.circle.colour = "white",
-#    gridline.mid.colour = "black",
-#    legend.position = "bottom"
-#  )
+ radar.df <- clusters %>%
+   group_by(group) %>%
+   summarise(across(BMI:FSH, mean))
+ 
+ radar_order <- c('group', 'Ins0', 'BMI', 'Glu0', 'DHEAS', 'T', 'LH', 'FSH', 'SHBG')
+ radar.df <- radar.df[, radar_order]
+ 
+ ggradar(
+    radar.df, 
+    font.radar = "sans",
+    values.radar = c("-1.5", "0", "1.5"),
+    grid.min = -1.5, grid.mid = 0, grid.max = 1.5,
+    # Polygons
+    group.line.width = 1, 
+    group.point.size = 1,
+    group.colours = c('grey', rgb(0.81,0.3,0.25,.85), rgb(.33,.5,.77,1)),
+    background.circle.colour = "white",
+    gridline.mid.colour = "black",
+    legend.position = "bottom"
+  )
 ```
 
 
