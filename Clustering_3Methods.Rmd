@@ -510,7 +510,7 @@ title = "PCA - Biplot")
 ################################################
 
 ## Merge the sample_ids
-hc.melt_gmm <- melt(clusters_km[1:9], id.var = "cluster_id")
+hc.melt_gmm <- melt(clusters_gmm[1:9], id.var = "cluster_id")
 
 #sorted_vars <- var_labels
 plot_labels <- c('Ins0', 'BMI', 'Glu0', 'DHEAS', 'T', 'FSH', 'LH', 'SHBG')
