@@ -1,0 +1,254 @@
+---
+title: "Kmeans clustering on 9 traits external dataset, 3 clusters, prediction using 874 Registry Random Forest model"
+author: "Kelly Brewer"
+date: "`r Sys.Date()`"
+output: html_document
+editor_options: 
+  chunk_output_type: inline
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+This script runs Kmeans on 9 traits with 3 cluster groups then Random Forest prediction for comparison. 
+
+```{r read data, echo=FALSE, warning=FALSE, error=FALSE, message=FALSE,}
+rm(list = ls())
+library(flexclust)
+library(dplyr)
+library(fpc)
+library(DT)
+library(data.table)
+library(gmodels)
+library(ggplot2)
+
+#assign values
+age <- 'age'; bmi <- 'bmi'
+traitnames = c('T', 'dheas', 'i0', 'g0', 'shbg', 'lh', 'fsh', 'amh')
+var_labels <- c('bmi', 'T', 'dheas', 'i0', 'g0', 'shbg', 'lh', 'fsh', 'amh')
+assay <- '_assay_method'
+d <- '.'
+cluster_cols <- c(age,
+                  paste(c(bmi, traitnames), 'z', sep=d))
+
+## columns of the input file
+cluster_input_cols <- c(age, bmi,
+                        traitnames,
+                        paste0(traitnames, assay))
+
+
+#         Function for Reverse Normal Transformation          ~~~
+#~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+rntransform <- function(y) {
+  out <- rank(y)
+  out[is.na(y)] <- NA
+  qnorm((out - 0.5) / max(out, na.rm=T))
+}
+
+##load input data
+#data must include columns for sample_id, age, 9 traits (as named above) and assay method code (heading as "g0_assay_method")
+##headings written in lowercase, may need to modify script or input file
+
+m.df0 = rio::import("path/to/data/raw_trait_data.csv") #will import any file type (.csv, .txt, etc), if file not tab-delimited, may have to modify script
+```
+
+```{r clean data, echo=FALSE}
+
+## Remove duplicate entries (keep the first occurrence for each set of duplicates)
+dupidx = duplicated(m.df0[, cluster_input_cols[1:(3+length(traitnames))]])
+if(sum(dupidx)>0) warning(paste("Removing", sum(dupidx), "duplicates from data"))
+m.df <- m.df0[!dupidx,]
+
+## Only keep samples with complete, non-zero data for age and the 8 traits
+completeidx = complete.cases(m.df[, c(age, bmi, traitnames)])
+if(sum(!completeidx)>0) {
+    warning(paste("Removing", sum(!completeidx), "records due to incomplete data"))
+    for(ii in c(age, bmi, traitnames)) {
+        tmpidx = complete.cases(m.df[, ii])
+        if(sum(!tmpidx)>0) message(paste(ii, "has", sum(!tmpidx), "missing records"))
+    }
+    m.df <- m.df[completeidx, ]
+}
+
+message(paste("There are",nrow(m.df), "cases remaining in the m.df dataset after removal of incomplete cases. "))
+
+# Create variables for removal flag flags and set them == 0
+trait.rem.flags = c()
+for (var in traitnames) {
+  names <- c(paste0(var, '_rem_flag', sep=''))
+  trait.rem.flags[[names]] <- names
+}
+trait.rem.flags <- as.character(trait.rem.flags)
+for (var in trait.rem.flags) {
+  m.df[,var] <- 0
+}
+
+#Trait Flag examples: 1=to be removed, 0=not outlier
+
+#G0 Removal
+m.df$g0_rem_flag <- ifelse(m.df$g0 > 126, 1, 0) #set to mg/dL
+
+# Add in any additional removals
+m.df$shbg_rem_flag <- ifelse(m.df$shbg > 200, 1, 0) #nmol/L
+m.df$fsh_rem_flag <- ifelse(m.df$fsh > 40, 1, 0) #U/L
+
+for (var in traitnames) {
+  x <- paste0(var,"_rem_flag")
+  if(sum(m.df[,x]) > 0) message(paste(var, "has", sum(m.df[,x]), "records removed as outliers."))
+}
+
+for (var in traitnames) {
+  x <- paste0(var,"_rem_flag")
+  m.df[,var] <- ifelse(m.df[,x] == 1, NA, m.df[,var])
+}
+
+## Only keep samples with complete, non-zero data for age and the 8 traits
+completeidx = complete.cases(m.df[, c(age, bmi, traitnames)])
+if(sum(!completeidx)>0) {
+    warning(paste("Removing", sum(!completeidx), "records records containing outliers.  "))
+    m.df <- m.df[completeidx, ]
+}
+
+message(paste("There are",nrow(m.df), "cases remaining in the dataset after outliers were removed.  "))
+
+```
+
+
+```{r adjust_normalize, eval=TRUE, echo=FALSE, error=FALSE, message=TRUE}
+##~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+##                        Adjust BMI and 7 Other Traits                     ----
+##                  Then apply reverse normal transformation                ----
+##~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+#        Adjust log(BMI) for age, obtain the residual.        ~~~
+#~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+m.df$bmi.z <- log(m.df$bmi)
+model <- lm(bmi.z ~ age, data=m.df)
+m.df$bmi.z <- resid(model)
+
+
+#      For the other 7 traits, adjust log(trait) for age      ~~~
+#             and assay method (if there is                   ~~~
+#       more than one method), obtain the residual.           ~~~
+#~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+for (var in traitnames) {
+  method <- paste0(var, assay)
+  z <- paste(var, 'z', sep=d)
+  m.df[,method] <- as.factor(as.character(m.df[,method]))
+  m.df[, z] <- log(m.df[, var])
+  if (nlevels(m.df[,method]) > 1) {
+    model <- lm(as.formula(paste(z, '~', age, '+', method)), data=m.df)
+  } else {
+    model <- lm(as.formula(paste(z, '~', age)), data=m.df)
+  }
+  m.df[, z] <-  resid(model)
+}
+
+#  Apply the inverse normal transformation to the residuals   ~~~
+#~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+for (col in cluster_cols[3:length(cluster_cols)]) {
+  #print(c(col,shapiro.test(m.df[,col])[[2]] ))
+  m.df[!is.na(m.df[,col]), col] <- rntransform(m.df[!is.na(m.df[,col]), col])
+}
+```
+
+```{r create_clust_df, eval=TRUE, echo=FALSE, error=FALSE, message=TRUE}
+
+#  # Display number of subjects being included after removals ~~~
+#~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+m.df2 <- m.df[, cluster_cols]
+names(m.df2) <- c(age, var_labels)
+
+ext = m.df2[var_labels]
+```
+
+``` {r Kmeans on data, echo=FALSE}
+
+##K-means clustering into 3 groups- All data
+set.seed(123)
+clk4 <- cclust(ext, k=3, method = "kmeans", dist  = "manhattan")
+ext$cluster_id <- clk4@cluster
+
+#apply naming convention to clusters
+centroids <- ext %>%
+  group_by(cluster_id) %>%
+  summarise_all(funs(median))
+centroids <- as.data.table(centroids)
+centroids[,bmi.rank:=rank(-bmi,ties.method="first")]
+centroids[,i0.rank:=rank(-i0,ties.method="first")]
+centroids[,g0.rank:=rank(-g0,ties.method="first")]
+centroids[,shbg.rank:=rank(shbg,ties.method="first")]
+centroids[,lh.rank:=rank(lh,ties.method="first")]
+centroids[,fsh.rank:=rank(fsh,ties.method="first")]
+centroids$total_rank <- rowSums(centroids[,10:15])
+
+met <- which.min(centroids$total_rank)
+rep <- which.max(centroids$total_rank)
+
+ext$cluster_new <- ifelse(ext$cluster_id==met, 10,
+                               ifelse(ext$cluster_id==rep, 11, 12))
+ext$cluster_id <- ifelse(ext$cluster_new==10, 1,
+                              ifelse(ext$cluster_new==11, 2, 3))
+
+ext$cluster_new = NULL  ## remove this temporary column
+ext$group <- ifelse(ext$cluster_id==1, "Metabolic",
+                         ifelse(ext$cluster_id==2, "Reproductive", "Background"))
+table(ext$group)
+
+#export file with cluster groups
+#write.csv(ext,"path/to/data/scaled_data_Km_9trait_3K.csv")
+
+ext$group <- factor(ext$group, levels = c('Metabolic', 'Reproductive', 'Background'))
+str(ext)
+```
+
+```{r predict clusters on x and compare to y, echo=FALSE}
+ext_x = ext[1:9] 
+ext_y = ext[11]
+
+rf_model= readRDS("path/to/model/RF_Km_Int_9trait_K3_874.rds")
+
+ext.predict <- predict(object=rf_model, newdata= ext_x)
+ext = cbind(ext, ext.predict)
+
+#determine accuracy of prediction model for each cluster group
+table(mhat=ext.predict, m=ext$group)
+CrossTable(ext$ext.predict, ext$group, digits=2, prop.r = FALSE, prop.c =TRUE,
+           prop.t= FALSE, prop.chisq = FALSE, chisq =FALSE, fisher =FALSE, missing.include=FALSE)
+```
+
+```{r plot data, echo=FALSE}
+cluster_colors <- c("#CF4D40D9", "#5480C4FF", 'grey') 
+
+#plot traits of Kmeans cluster groups
+melt <- reshape2::melt(ext[c(1:9,11)], id.var = "group")
+
+plot_labels <- c('Ins0', 'BMI', 'Glu0', 'DHEAS', 'T', 'FSH', 'LH', 'SHBG', 'AMH')
+melt$variable <- factor(melt$variable, levels = c('i0','bmi','g0','dheas', 'T','fsh','lh', 'shbg', 'amh'))
+
+ggplot(data = melt, aes(x=variable, y=value, fill=group)) + 
+  geom_boxplot(outlier.shape = NA, coef = 0) +
+  scale_fill_manual(values=cluster_colors, name = "") +
+  ylim(-2,2) +
+  theme_bw() +
+  theme(legend.position = "bottom", legend.box = "horizontal", 
+        axis.title.x=element_blank()) + ylab("Z") +ggtitle ("Kmeans- scaled- 9 traits")
+
+#plot predicted clusters data traits
+melt <- reshape2::melt(ext[c(1:9,12)], id.var = "ext.predict")
+
+plot_labels <- c('Ins0', 'BMI', 'Glu0', 'DHEAS', 'T', 'FSH', 'LH', 'SHBG', 'AMH')
+melt$variable <- factor(melt$variable, levels = c('i0','bmi','g0','dheas', 'T','fsh','lh', 'shbg', 'amh'))
+
+ggplot(data = melt, aes(x=variable, y=value, fill=ext.predict)) + 
+  geom_boxplot(outlier.shape = NA, coef = 0) +
+  scale_fill_manual(values=cluster_colors, name = "") +
+  ylim(-2,2) +
+  theme_bw() +
+  theme(legend.position = "bottom", legend.box = "horizontal", 
+        axis.title.x=element_blank()) + ylab("Z") +ggtitle ("Predicted Data")
+```
