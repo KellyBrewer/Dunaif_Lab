@@ -22,6 +22,7 @@ library(DT)
 library(data.table)
 library(gmodels)
 library(ggplot2)
+library(randomForest)
 
 #assign values
 age <- 'age'; bmi <- 'bmi'
