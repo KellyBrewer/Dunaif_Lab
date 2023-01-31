@@ -45,7 +45,6 @@ library(describedata)
 library(lattice)
 library(corrplot)
 library(DT)
-library(ggradar)
 library(qwraps2)
 options(qwraps2_markup = "markdown")
 library(Hmisc)
@@ -380,7 +379,7 @@ fviz_pca_biplot(pca, col.ind = hc_clusters$group, palette = c('grey', rgb(0.81,0
 ```{r Kmeans, echo=FALSE, error=FALSE, message=FALSE, warning=FALSE}
 
 set.seed(123)
-km.res <- stats::kmeans(dist(cluster_matrix, method=dist_metric), 3, nstart = 25) #uses manhattan distance, otherwise Kmeans defaults to Euclidean
+km.res <- stats::kmeans(dist(cluster_matrix, method=dist_metric), 3, nstart = 100) #uses manhattan distance, otherwise Kmeans defaults to Euclidean
 
 ## Get clustering stats
 km_stats <- cluster.stats(dist(cluster_matrix, method=dist_metric),  km.res$cluster)
@@ -562,7 +561,7 @@ table(cluster_compare$HCKmCon)
 library(ClusterR)
 
 m.df_gmm <- m.df2[3:10]
-gmm <- GMM(m.df_gmm, 3, dist_mode = "maha_dist", seed_mode = "random_subset", km_iter =10, em_iter = 100, verbose =F) 
+gmm <- GMM(m.df_gmm, 3, dist_mode = "maha_dist", seed_mode = "random_subset", km_iter =10, em_iter = 100, verbose =F, seed=123) 
 
 pr= predict_GMM(m.df_gmm, gmm$centroids, gmm$covariance_matrices, gmm$weights)
 
