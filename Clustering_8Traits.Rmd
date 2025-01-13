@@ -54,7 +54,7 @@ options(qwraps2_markup = "markdown")
 ## Path/file of the input file, which must have columns according to
 ## cluster_input_cols below.
 ##~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-input_file <- "J:/endocrinology/Dunaif_Train/Clustering/data/SampleData_355.txt"
+input_file <- "/path/to/SampleData_355.txt"
 
 
 ##~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
